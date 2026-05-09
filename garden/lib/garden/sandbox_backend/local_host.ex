@@ -4,7 +4,7 @@ defmodule Garden.SandboxBackend.LocalHost do
   alias Garden.Guardrails
   alias Garden.Sandboxes.LocalHostRuntime
 
-  @root Path.expand("../tmp/garden/sandboxes", File.cwd!())
+  @root Path.join(System.tmp_dir!(), "garden/sandboxes")
 
   @impl true
   def name, do: "local_host"
@@ -30,8 +30,8 @@ defmodule Garden.SandboxBackend.LocalHost do
 
   @impl true
   def list_files(sandbox, path) do
-    with :ok <- Guardrails.allow_file_action(enriched(sandbox), :list, path, %{}),
-         {:ok, resolved} <- resolve_path(sandbox, path),
+    with {:ok, resolved} <- resolve_path(sandbox, path),
+         :ok <- Guardrails.allow_file_action(enriched(sandbox), :list, resolved, %{}),
          true <- File.dir?(resolved) || {:error, :file_not_found} do
       entries = resolved |> File.ls!() |> Enum.sort()
       {:ok, %{path: normalized_display_path(sandbox, resolved), entries: entries}}
@@ -43,8 +43,8 @@ defmodule Garden.SandboxBackend.LocalHost do
 
   @impl true
   def read_file(sandbox, path) do
-    with :ok <- Guardrails.allow_file_action(enriched(sandbox), :read, path, %{}),
-         {:ok, resolved} <- resolve_path(sandbox, path),
+    with {:ok, resolved} <- resolve_path(sandbox, path),
+         :ok <- Guardrails.allow_file_action(enriched(sandbox), :read, resolved, %{}),
          true <- File.exists?(resolved) || {:error, :file_not_found},
          {:ok, content} <- File.read(resolved) do
       {:ok, %{path: normalized_display_path(sandbox, resolved), content: content}}
@@ -56,8 +56,8 @@ defmodule Garden.SandboxBackend.LocalHost do
 
   @impl true
   def write_file(sandbox, path, content) do
-    with :ok <- Guardrails.allow_file_action(enriched(sandbox), :write, path, %{bytes: byte_size(content)}),
-         {:ok, resolved} <- resolve_path(sandbox, path) do
+    with {:ok, resolved} <- resolve_path(sandbox, path),
+         :ok <- Guardrails.allow_file_action(enriched(sandbox), :write, resolved, %{bytes: byte_size(content)}) do
       resolved |> Path.dirname() |> File.mkdir_p!()
       File.write!(resolved, content)
       {:ok, %{path: normalized_display_path(sandbox, resolved), bytes: byte_size(content)}}

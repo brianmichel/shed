@@ -11,7 +11,7 @@ defmodule Garden.Sandboxes.LocalHostRuntime do
   def ensure_started(sandbox_id, store, root, sandbox) do
     case :global.whereis_name({__MODULE__, sandbox_id}) do
       :undefined -> Garden.Sandboxes.LocalHostRuntimeSupervisor.start_runtime(sandbox_id, store, root, sandbox)
-      _ -> :ok
+      _pid -> GenServer.cast(via(sandbox_id), {:update_store, store})
     end
   end
 
@@ -38,16 +38,16 @@ defmodule Garden.Sandboxes.LocalHostRuntime do
 
   def handle_info({port, {:data, data}}, state) do
     case find_command_by_port(state, port) do
-      {command_id, %{stream: stream} = info} ->
+      {command_id, %{stream: stream}} ->
         notify(state, {:command_output, state.sandbox_id, command_id, stream, IO.iodata_to_binary(data)})
-        {:noreply, %{state | commands: Map.put(state.commands, command_id, info)}}
+        {:noreply, state}
       _ -> {:noreply, state}
     end
   end
 
   def handle_info({port, {:exit_status, status}}, state) do
     case find_command_by_port(state, port) do
-      {command_id, info} ->
+      {command_id, _info} ->
         kind = if status == 0, do: :exited, else: :failed
         attrs = if status == 0, do: %{exit_code: status}, else: %{exit_code: status}
         notify(state, {:command_finished, state.sandbox_id, command_id, kind, attrs})
@@ -57,14 +57,15 @@ defmodule Garden.Sandboxes.LocalHostRuntime do
   end
 
   def handle_call({:start_command, command}, _from, state) do
+    resolved_cwd = resolve_virtual_cwd(state, command.cwd)
     sandbox = Map.put(state.sandbox, :workspace_root, state.root)
-    spec = %{command: command.command, cwd: command.cwd, env: command.env, metadata: command.metadata}
+    spec = %{command: command.command, cwd: resolved_cwd, env: command.env, metadata: command.metadata}
 
     with :ok <- Guardrails.allow_command(sandbox, spec),
-         {:ok, cwd} <- Guardrails.normalize_cwd(sandbox, command.cwd),
+         {:ok, cwd} <- Guardrails.normalize_cwd(sandbox, resolved_cwd),
          env <- Guardrails.sanitize_env(sandbox, command.env || %{}) do
-      port = Port.open({:spawn_executable, System.find_executable("sh")}, [:binary, :stderr_to_stdout, :exit_status, {:cd, cwd}, {:env, Enum.into(env, [])}, args: ["-lc", command.command]])
-      os_pid = Port.info(port, :os_pid)[:os_pid]
+      port = Port.open({:spawn, command.command}, [:binary, :stderr_to_stdout, :exit_status, {:cd, cwd}, {:env, Enum.into(env, [])}])
+      os_pid = case Port.info(port, :os_pid) do {:os_pid, pid} -> pid; _ -> nil end
       notify(state, {:command_started, state.sandbox_id, command.id, os_pid || :erlang.phash2(command.id, 65_535)})
       {:reply, :ok, %{state | commands: Map.put(state.commands, command.id, %{port: port, os_pid: os_pid, stream: :stdout})}}
     else
@@ -106,6 +107,10 @@ defmodule Garden.Sandboxes.LocalHostRuntime do
     end
   end
 
+  def handle_cast({:update_store, store}, state) do
+    {:noreply, %{state | store: store}}
+  end
+
   defp find_command_by_port(state, port) do
     Enum.find_value(state.commands, fn {id, info} -> if info.port == port, do: {id, info} end)
   end
@@ -116,4 +121,9 @@ defmodule Garden.Sandboxes.LocalHostRuntime do
 
   defp noreply(_msg, state), do: {:noreply, state}
   defp via(sandbox_id), do: {:global, {__MODULE__, sandbox_id}}
+
+  defp resolve_virtual_cwd(state, nil), do: state.root
+  defp resolve_virtual_cwd(state, "/workspace"), do: state.root
+  defp resolve_virtual_cwd(state, "/workspace/" <> rest), do: Path.join(state.root, rest)
+  defp resolve_virtual_cwd(state, cwd), do: Path.expand(cwd, state.root)
 end

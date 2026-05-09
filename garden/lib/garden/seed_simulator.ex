@@ -112,6 +112,8 @@ defmodule Garden.SeedSimulator do
 
   def handle_info({:seed_message, _message}, state), do: {:noreply, state}
 
+  def handle_info({:session_updated, _session}, state), do: {:noreply, state}
+
   def handle_info({:garden_message, message}, state) do
     state = maybe_ack_garden_message(state, message)
 
@@ -161,38 +163,6 @@ defmodule Garden.SeedSimulator do
     end
   end
 
-  defp handle_command_start(state, payload) do
-    command_id = payload["command_id"]
-    command = %{"command" => payload["command"], "cancelled" => false}
-    state = %{state | commands: Map.put(state.commands, command_id, command)}
-
-    state = emit(state, "command.accepted", %{"command_id" => command_id, "state" => "queued"})
-    Process.send_after(self(), {:command_started, command_id}, 25)
-    {:noreply, state}
-  end
-
-  defp handle_command_stdin(state, payload) do
-    command_id = payload["command_id"]
-    data = payload["data"] || ""
-    state = emit(state, "command.stdin.accepted", %{"command_id" => command_id, "bytes" => byte_size(data)})
-    state = emit(state, "command.stdout", %{"command_id" => command_id, "chunk" => "stdin> #{data}", "encoding" => "utf-8", "stream_seq" => next_stream_seq(state, command_id)})
-    {:noreply, state}
-  end
-
-  defp handle_command_cancel(state, payload) do
-    command_id = payload["command_id"]
-    Process.send_after(self(), {:command_cancelled, command_id}, 20)
-    {:noreply, state}
-  end
-
-  defp handle_command_kill(state, payload) do
-    command_id = payload["command_id"]
-    Process.send_after(self(), {:command_killed, command_id}, 10)
-    {:noreply, state}
-  end
-
-  def handle_info({:session_updated, _session}, state), do: {:noreply, state}
-
   def handle_info({:command_started, command_id}, state) do
     state = emit(state, "command.started", %{"command_id" => command_id, "pid" => :erlang.phash2(command_id, 65_535), "started_at" => DateTime.to_iso8601(DateTime.utc_now())})
     state = emit(state, "command.stdout", %{"command_id" => command_id, "chunk" => "$ running\n", "encoding" => "utf-8", "stream_seq" => next_stream_seq(state, command_id)})
@@ -226,6 +196,36 @@ defmodule Garden.SeedSimulator do
     else
       {:noreply, state}
     end
+  end
+
+  defp handle_command_start(state, payload) do
+    command_id = payload["command_id"]
+    command = %{"command" => payload["command"], "cancelled" => false}
+    state = %{state | commands: Map.put(state.commands, command_id, command)}
+
+    state = emit(state, "command.accepted", %{"command_id" => command_id, "state" => "queued"})
+    Process.send_after(self(), {:command_started, command_id}, 25)
+    {:noreply, state}
+  end
+
+  defp handle_command_stdin(state, payload) do
+    command_id = payload["command_id"]
+    data = payload["data"] || ""
+    state = emit(state, "command.stdin.accepted", %{"command_id" => command_id, "bytes" => byte_size(data)})
+    state = emit(state, "command.stdout", %{"command_id" => command_id, "chunk" => "stdin> #{data}", "encoding" => "utf-8", "stream_seq" => next_stream_seq(state, command_id)})
+    {:noreply, state}
+  end
+
+  defp handle_command_cancel(state, payload) do
+    command_id = payload["command_id"]
+    Process.send_after(self(), {:command_cancelled, command_id}, 20)
+    {:noreply, state}
+  end
+
+  defp handle_command_kill(state, payload) do
+    command_id = payload["command_id"]
+    Process.send_after(self(), {:command_killed, command_id}, 10)
+    {:noreply, state}
   end
 
   def terminate(_reason, state) do

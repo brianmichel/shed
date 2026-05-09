@@ -119,6 +119,7 @@ defmodule GardenWeb.SandboxConsoleLive.Show do
             <h1 class="text-2xl font-semibold mt-2">Sandbox console</h1>
             <p class="font-mono text-sm">{@sandbox.id} · {@sandbox.state}</p>
             <p class="text-sm text-base-content/70">Backend: <span class="badge badge-secondary">{@sandbox.metadata["backend"] || @sandbox.capabilities["backend"] || "unknown"}</span></p>
+            <p class="text-sm text-base-content/70 font-mono text-xs">Workspace: {Garden.SandboxBackend.workspace_root(@sandbox)}</p>
           </div>
         </div>
 

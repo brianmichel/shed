@@ -572,35 +572,6 @@ defmodule Garden.Sandboxes.Store do
     put_in(state, [:filesystems, sandbox_id], filesystem)
   end
 
-  defp fetch_file_content(state, sandbox_id, path) do
-    case get_in(state, [:filesystems, sandbox_id, path]) do
-      nil -> {:error, :file_not_found}
-      content -> {:ok, content}
-    end
-  end
-
-  defp put_file_content(state, sandbox_id, path, content) do
-    update_in(state, [:filesystems], fn filesystems ->
-      Map.update(filesystems, sandbox_id, %{path => content}, &Map.put(&1, path, content))
-    end)
-  end
-
-  defp list_filesystem_entries(state, sandbox_id, path) do
-    files = Map.get(state.filesystems, sandbox_id, %{})
-    prefix = String.trim_trailing(path, "/") <> "/"
-
-    entries =
-      files
-      |> Map.keys()
-      |> Enum.filter(&String.starts_with?(&1, prefix))
-      |> Enum.map(&String.replace_prefix(&1, prefix, ""))
-      |> Enum.reject(&String.contains?(&1, "/"))
-      |> Enum.uniq()
-      |> Enum.sort()
-
-    {:ok, entries}
-  end
-
   defp default_filesystem(sandbox_id) do
     %{
       "/workspace/README.txt" => "Sandbox #{sandbox_id}\n",
