@@ -28,10 +28,10 @@ defmodule Garden.Application do
   end
 
   defp runtime_supervisor do
-    case Application.get_env(:garden, :runtime_mode, :mock) do
-      :mock -> Garden.Sandboxes.MockComputeSupervisor
-      :local_host -> Garden.Sandboxes.LocalHostRuntimeSupervisor
-      mode -> raise ArgumentError, "unsupported :runtime_mode #{inspect(mode)}; expected :mock or :local_host"
+    case Application.get_env(:garden, :sandbox_backend, Garden.SandboxBackend.Mock) do
+      Garden.SandboxBackend.Mock -> Garden.Sandboxes.MockComputeSupervisor
+      Garden.SandboxBackend.LocalHost -> Garden.Sandboxes.LocalHostRuntimeSupervisor
+      backend -> raise ArgumentError, "no supervisor known for sandbox_backend #{inspect(backend)}"
     end
   end
 

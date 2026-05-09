@@ -32,8 +32,11 @@ defmodule Garden.Sandboxes.Store do
   def write_file(sandbox_id, path, content), do: GenServer.call(__MODULE__, {:write_file, sandbox_id, path, content})
   def protocol_message(session_id, message), do: GenServer.cast(__MODULE__, {:protocol_message, session_id, message})
 
+  @sweep_interval_ms 30_000
+
   @impl true
   def init(_arg) do
+    schedule_lease_sweep()
     {:ok,
      %{
        sandboxes: %{},
@@ -451,6 +454,29 @@ defmodule Garden.Sandboxes.Store do
     end
   end
 
+  @impl true
+  def handle_info(:sweep_leases, state) do
+    now = now()
+
+    state =
+      state.sandboxes
+      |> Map.values()
+      |> Enum.filter(&(&1.state not in ["releasing", "released", "failed"] and lease_expired?(&1, now)))
+      |> Enum.reduce(state, fn sandbox, acc ->
+        id = sandbox.id
+        releasing = %{sandbox | state: "releasing", updated_at: now}
+        acc = put_sandbox(acc, releasing)
+        acc = append_sandbox_event(acc, id, "sandbox.release.requested", %{"reason" => "lease_expired"})
+        SandboxBackend.teardown_sandbox(id)
+        released = %{releasing | state: "released", updated_at: now}
+        acc = put_sandbox(acc, released)
+        append_sandbox_event(acc, id, "sandbox.released", %{"state" => "released"})
+      end)
+
+    schedule_lease_sweep()
+    {:noreply, state}
+  end
+
   defp dispatch_or_mock_start(sandbox_id, command) do
     case SeedSessions.find_by_sandbox(sandbox_id) do
       {:ok, %{status: :connected} = session} ->
@@ -686,6 +712,15 @@ defmodule Garden.Sandboxes.Store do
 
   defp broadcast(topic, event) do
     Phoenix.PubSub.broadcast(Garden.PubSub, topic, {:event, event})
+  end
+
+  defp schedule_lease_sweep, do: Process.send_after(self(), :sweep_leases, @sweep_interval_ms)
+
+  defp lease_expired?(sandbox, now) do
+    case DateTime.from_iso8601(sandbox.lease["expires_at"]) do
+      {:ok, expires_at, _} -> DateTime.compare(now, expires_at) == :gt
+      _ -> false
+    end
   end
 
   defp id(prefix), do: prefix <> "_" <> Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)

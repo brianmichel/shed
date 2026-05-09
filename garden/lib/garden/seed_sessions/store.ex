@@ -122,7 +122,7 @@ defmodule Garden.SeedSessions.Store do
       mapped = Message.to_map(message)
       Phoenix.PubSub.broadcast(Garden.PubSub, session_topic(session_id), {:seed_message, mapped})
       Garden.Sandboxes.Store.protocol_message(session_id, mapped)
-      {:reply, {:ok, session}, state}
+      {:reply, {:ok, session}, state, {:continue, {:handle_inbound, session_id, message.type, message}}}
     else
       true -> {:reply, {:error, :duplicate_message}, state}
       error -> {:reply, error, state}
@@ -130,34 +130,8 @@ defmodule Garden.SeedSessions.Store do
   end
 
   def handle_call({:dispatch, session_id, type, payload, opts}, _from, state) do
-    with {:ok, session} <- fetch_session(state, session_id) do
-      seq = session.last_garden_seq_sent + 1
-
-      message = %Message{
-        version: "1",
-        type: type,
-        message_id: id("msg"),
-        ack_id: Keyword.get(opts, :ack_id),
-        request_id: Keyword.get(opts, :request_id, id("req")),
-        session_id: session.session_id,
-        sandbox_id: session.sandbox_id,
-        seq: seq,
-        timestamp: DateTime.to_iso8601(now()),
-        expects_ack: Keyword.get(opts, :expects_ack, true),
-        reply_to: Keyword.get(opts, :reply_to),
-        payload: payload
-      }
-
-      updated =
-        session
-        |> Map.put(:last_garden_seq_sent, seq)
-        |> Map.put(:sent_messages, Map.put(session.sent_messages, message.message_id, message))
-        |> Map.put(:updated_at, now())
-        |> append_message(%{direction: "outbound", message: Message.to_map(message)})
-
-      state = put_session(state, updated)
-      broadcast_session_update(updated)
-      Phoenix.PubSub.broadcast(Garden.PubSub, session_topic(session_id), {:garden_message, Message.to_map(message)})
+    with {:ok, _} <- fetch_session(state, session_id) do
+      {state, message} = do_dispatch(state, session_id, type, payload, opts)
       {:reply, {:ok, message}, state}
     else
       error -> {:reply, error, state}
@@ -166,6 +140,106 @@ defmodule Garden.SeedSessions.Store do
 
   def handle_call({:get, session_id}, _from, state) do
     {:reply, fetch_session(state, session_id), state}
+  end
+
+  @impl true
+  def handle_continue({:handle_inbound, session_id, "seed.hello", _message}, state) do
+    case fetch_session(state, session_id) do
+      {:ok, session} ->
+        {state, _} =
+          do_dispatch(state, session_id, "garden.hello", %{
+            "protocol_version" => "1",
+            "session_id" => session_id,
+            "sandbox_id" => session.sandbox_id,
+            "heartbeat_interval_ms" => 10_000,
+            "ack_timeout_ms" => 5_000
+          }, expects_ack: false)
+
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_continue({:handle_inbound, session_id, "seed.register", _message}, state) do
+    case fetch_session(state, session_id) do
+      {:ok, session} ->
+        lease_expires_at =
+          case Garden.Sandboxes.get_sandbox(session.sandbox_id) do
+            {:ok, sandbox} -> sandbox.lease["expires_at"]
+            _ -> nil
+          end
+
+        payload =
+          %{
+            "session_id" => session_id,
+            "sandbox_id" => session.sandbox_id,
+            "max_session_duration_ms" => 7_200_000
+          }
+          |> then(&if(lease_expires_at, do: Map.put(&1, "lease_expires_at", lease_expires_at), else: &1))
+
+        {state, _} = do_dispatch(state, session_id, "garden.registered", payload, expects_ack: false)
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_continue({:handle_inbound, session_id, "seed.heartbeat", _message}, state) do
+    case fetch_session(state, session_id) do
+      {:ok, session} ->
+        lease_expires_at =
+          case Garden.Sandboxes.get_sandbox(session.sandbox_id) do
+            {:ok, sandbox} -> sandbox.lease["expires_at"]
+            _ -> nil
+          end
+
+        payload =
+          %{
+            "server_time" => DateTime.to_iso8601(DateTime.utc_now()),
+            "status" => "ok"
+          }
+          |> then(&if(lease_expires_at, do: Map.put(&1, "lease_expires_at", lease_expires_at), else: &1))
+
+        {state, _} = do_dispatch(state, session_id, "garden.heartbeat_ack", payload, expects_ack: false)
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_continue({:handle_inbound, session_id, "seed.resume", message}, state) do
+    case fetch_session(state, session_id) do
+      {:ok, session} ->
+        last_garden_seq_seen = message.payload["last_garden_seq_seen"]
+
+        session.sent_messages
+        |> Map.values()
+        |> Enum.filter(&(&1.seq > last_garden_seq_seen))
+        |> Enum.sort_by(& &1.seq)
+        |> Enum.each(fn msg ->
+          Phoenix.PubSub.broadcast(Garden.PubSub, session_topic(session_id), {:garden_message, Message.to_map(msg)})
+        end)
+
+        {state, _} =
+          do_dispatch(state, session_id, "garden.resume", %{
+            "status" => "ok",
+            "session_id" => session_id,
+            "replay_from_garden_seq" => last_garden_seq_seen
+          }, expects_ack: false)
+
+        {:noreply, state}
+
+      _ ->
+        {:noreply, state}
+    end
+  end
+
+  def handle_continue({:handle_inbound, _session_id, _type, _message}, state) do
+    {:noreply, state}
   end
 
   @impl true
@@ -182,6 +256,38 @@ defmodule Garden.SeedSessions.Store do
       end)
 
     {:noreply, %{state | sessions: sessions}}
+  end
+
+  defp do_dispatch(state, session_id, type, payload, opts) do
+    {:ok, session} = fetch_session(state, session_id)
+    seq = session.last_garden_seq_sent + 1
+
+    message = %Message{
+      version: "1",
+      type: type,
+      message_id: id("msg"),
+      ack_id: Keyword.get(opts, :ack_id),
+      request_id: Keyword.get(opts, :request_id, id("req")),
+      session_id: session.session_id,
+      sandbox_id: session.sandbox_id,
+      seq: seq,
+      timestamp: DateTime.to_iso8601(now()),
+      expects_ack: Keyword.get(opts, :expects_ack, true),
+      reply_to: Keyword.get(opts, :reply_to),
+      payload: payload
+    }
+
+    updated =
+      session
+      |> Map.put(:last_garden_seq_sent, seq)
+      |> Map.put(:sent_messages, Map.put(session.sent_messages, message.message_id, message))
+      |> Map.put(:updated_at, now())
+      |> append_message(%{direction: "outbound", message: Message.to_map(message)})
+
+    state = put_session(state, updated)
+    broadcast_session_update(updated)
+    Phoenix.PubSub.broadcast(Garden.PubSub, session_topic(session_id), {:garden_message, Message.to_map(message)})
+    {state, message}
   end
 
   defp fetch_key(state, session_key) do

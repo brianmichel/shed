@@ -8,9 +8,9 @@ defmodule Garden.Sandboxes.LocalHostIntegrationTest do
   setup do
     Store.reset!()
 
-    # Switch to LocalHost backend for this test
     original = Application.get_env(:garden, :sandbox_backend)
     Application.put_env(:garden, :sandbox_backend, Garden.SandboxBackend.LocalHost)
+    start_supervised!(Garden.Sandboxes.LocalHostRuntimeSupervisor)
 
     on_exit(fn ->
       Application.put_env(:garden, :sandbox_backend, original)
