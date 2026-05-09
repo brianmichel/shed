@@ -518,3 +518,60 @@ Suggested JSON error envelope:
 4. define seed ↔ garden protocol for command lifecycle and output chunks
 5. define lease extension policy and max lifetime rules
 6. add OpenAPI generation once the payloads settle
+7. define and implement the Garden ↔ Seed session protocol
+
+## Related docs
+
+- `docs/seed-protocol.md` — WebSocket-first control protocol draft between Garden and Seed
+
+## Sandbox backends
+
+Garden uses a pluggable runtime backend for sandbox execution.
+
+Configured via:
+
+```elixir
+config :garden, :sandbox_backend, Garden.SandboxBackend.LocalHost
+```
+
+Built-ins:
+- `Garden.SandboxBackend.Mock` — deterministic simulated runtime
+- `Garden.SandboxBackend.LocalHost` — real command/file execution on the local machine inside a per-sandbox workspace
+
+Current defaults:
+- `dev.exs` → `Garden.SandboxBackend.LocalHost`
+- `test.exs` → `Garden.SandboxBackend.Mock`
+
+The active backend is surfaced in sandbox metadata and shown in the dev UI.
+
+## Guardrails
+
+Garden defines `Garden.Guardrails` as an environment-agnostic behavior for sandbox execution policy.
+
+It is intended to be shared across backends such as:
+- local development sandboxes
+- Linux container sandboxes
+- macOS VM sandboxes
+- future remote execution environments
+
+By default it uses:
+- `Garden.Guardrails.Default`
+
+Optional built-in variants:
+- `Garden.Guardrails.Linux`
+- `Garden.Guardrails.MacOS`
+
+Projects can supply their own implementation downstream:
+
+```elixir
+config :garden, :guardrails, MyApp.GardenGuardrails
+```
+
+The behavior is the extension point for:
+- command allow/deny decisions
+- path restrictions
+- cwd normalization
+- env sanitization
+- signal restrictions
+
+The `Garden.LocalSandbox.Guardrails*` modules remain as compatibility delegates, but the canonical interface is `Garden.Guardrails`.

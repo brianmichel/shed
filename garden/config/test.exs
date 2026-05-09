@@ -16,6 +16,7 @@ config :garden, Garden.Repo,
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :garden, :start_repo, false
+config :garden, :sandbox_backend, Garden.SandboxBackend.Mock
 
 config :garden, GardenWeb.Endpoint,
   http: [ip: {127, 0, 0, 1}, port: 4002],

@@ -65,6 +65,25 @@ defmodule Garden.Sandboxes.MockCompute do
     {:noreply, state}
   end
 
+  def handle_info({:run_command, command}, state) do
+    Process.send_after(self(), {:emit_output, command.id, :stdout, "$ #{command.command}\n"}, 0)
+
+    case command_output(state, command) do
+      {:ok, output, completion_ms} ->
+        if output != "" do
+          Process.send_after(self(), {:emit_output, command.id, :stdout, output}, 10)
+        end
+
+        Process.send_after(self(), {:complete_command, command.id, {:exit, 0}}, completion_ms)
+
+      {:error, output, exit_code} ->
+        Process.send_after(self(), {:emit_output, command.id, :stderr, output}, 10)
+        Process.send_after(self(), {:complete_command, command.id, {:failed, exit_code, ""}}, 30)
+    end
+
+    {:noreply, state}
+  end
+
   def handle_info({:complete_command, command_id, status}, state) do
     commands = Map.delete(state.commands, command_id)
 
@@ -125,21 +144,50 @@ defmodule Garden.Sandboxes.MockCompute do
   end
 
   defp schedule_command(command) do
-    Process.send_after(self(), {:emit_output, command.id, :stdout, "$ #{command.command}\n"}, 10)
+    Process.send_after(self(), {:run_command, command}, 10)
+  end
+
+  defp command_output(state, command) do
+    trimmed = String.trim(command.command)
 
     cond do
-      String.contains?(command.command, "fail") ->
-        Process.send_after(self(), {:complete_command, command.id, {:failed, 1, "mock failure\n"}}, 30)
+      trimmed == "pwd" ->
+        {:ok, command.cwd <> "\n", 30}
 
-      String.contains?(command.command, "sleep") ->
-        Process.send_after(self(), {:emit_output, command.id, :stdout, "sleeping...\n"}, 25)
-        Process.send_after(self(), {:complete_command, command.id, {:exit, 0}}, 80)
+      trimmed == "ls" or trimmed == "ls -l" or trimmed == "ls -la" or trimmed == "ls -latr" ->
+        {:ok, list_workspace(state), 30}
+
+      String.starts_with?(trimmed, "cat ") ->
+        path = trimmed |> String.replace_prefix("cat ", "") |> String.trim()
+
+        case Garden.Sandboxes.read_file(state.sandbox_id, normalize_path(path, command.cwd)) do
+          {:ok, %{content: content}} -> {:ok, content, 30}
+          _ -> {:error, "cat: #{path}: No such file or directory\n", 1}
+        end
+
+      String.starts_with?(trimmed, "echo ") ->
+        {:ok, String.replace_prefix(trimmed, "echo ", "") <> "\n", 30}
+
+      String.contains?(trimmed, "sleep") ->
+        {:ok, "sleeping...\n", 120}
+
+      String.contains?(trimmed, "fail") ->
+        {:error, "mock failure\n", 1}
 
       true ->
-        Process.send_after(self(), {:emit_output, command.id, :stdout, "done\n"}, 20)
-        Process.send_after(self(), {:complete_command, command.id, {:exit, 0}}, 35)
+        {:ok, "done\n", 30}
     end
   end
+
+  defp list_workspace(state) do
+    case Garden.Sandboxes.list_files(state.sandbox_id, "/workspace") do
+      {:ok, %{entries: entries}} -> Enum.join(entries, "\n") <> "\n"
+      _ -> "\n"
+    end
+  end
+
+  defp normalize_path("/" <> _ = path, _cwd), do: path
+  defp normalize_path(path, cwd), do: String.trim_trailing(cwd, "/") <> "/" <> path
 
   defp notify(state, message) do
     GenServer.cast(state.store, message)

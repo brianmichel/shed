@@ -12,7 +12,10 @@ defmodule Garden.Application do
         GardenWeb.Telemetry,
         {DNSCluster, query: Application.get_env(:garden, :dns_cluster_query) || :ignore},
         {Phoenix.PubSub, name: Garden.PubSub},
+        Garden.SeedSessions.Store,
+        Garden.SeedSimulatorSupervisor,
         Garden.Sandboxes.MockComputeSupervisor,
+        Garden.Sandboxes.LocalHostRuntimeSupervisor,
         Garden.Sandboxes.Store,
         # Start to serve requests, typically the last entry
         GardenWeb.Endpoint

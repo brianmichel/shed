@@ -3,9 +3,10 @@ defmodule Garden.Sandboxes.Store do
 
   use GenServer
 
+  alias Garden.Persistence
+  alias Garden.SandboxBackend
   alias Garden.Sandboxes
-  alias Garden.Sandboxes.MockCompute
-  alias Garden.Sandboxes.MockComputeSupervisor
+  alias Garden.SeedSessions
 
   def start_link(arg \\ []) do
     GenServer.start_link(__MODULE__, arg, name: __MODULE__)
@@ -14,6 +15,7 @@ defmodule Garden.Sandboxes.Store do
   def reset!, do: GenServer.call(__MODULE__, :reset)
   def list_sandboxes, do: GenServer.call(__MODULE__, :list_sandboxes)
   def acquire_sandbox(attrs), do: GenServer.call(__MODULE__, {:acquire_sandbox, attrs})
+  def ensure_sandbox(id, attrs), do: GenServer.call(__MODULE__, {:ensure_sandbox, id, attrs})
   def get_sandbox(id), do: GenServer.call(__MODULE__, {:get_sandbox, id})
   def extend_lease(id, attrs), do: GenServer.call(__MODULE__, {:extend_lease, id, attrs})
   def release_sandbox(id, attrs), do: GenServer.call(__MODULE__, {:release_sandbox, id, attrs})
@@ -25,6 +27,10 @@ defmodule Garden.Sandboxes.Store do
   def cancel_command(sandbox_id, command_id, attrs), do: GenServer.call(__MODULE__, {:cancel_command, sandbox_id, command_id, attrs})
   def kill_command(sandbox_id, command_id, attrs), do: GenServer.call(__MODULE__, {:kill_command, sandbox_id, command_id, attrs})
   def list_command_events(sandbox_id, command_id, opts), do: GenServer.call(__MODULE__, {:list_command_events, sandbox_id, command_id, opts})
+  def list_files(sandbox_id, path), do: GenServer.call(__MODULE__, {:list_files, sandbox_id, path})
+  def read_file(sandbox_id, path), do: GenServer.call(__MODULE__, {:read_file, sandbox_id, path})
+  def write_file(sandbox_id, path, content), do: GenServer.call(__MODULE__, {:write_file, sandbox_id, path, content})
+  def protocol_message(session_id, message), do: GenServer.cast(__MODULE__, {:protocol_message, session_id, message})
 
   @impl true
   def init(_arg) do
@@ -32,6 +38,7 @@ defmodule Garden.Sandboxes.Store do
      %{
        sandboxes: %{},
        commands: %{},
+       filesystems: %{},
        sandbox_events: %{},
        command_events: %{},
        next_seq: %{}
@@ -40,12 +47,13 @@ defmodule Garden.Sandboxes.Store do
 
   @impl true
   def handle_call(:reset, _from, state) do
-    Enum.each(Map.keys(state.sandboxes), &MockCompute.terminate_compute/1)
+    Enum.each(Map.keys(state.sandboxes), &SandboxBackend.teardown_sandbox/1)
 
     {:reply, :ok,
      %{
        sandboxes: %{},
        commands: %{},
+       filesystems: %{},
        sandbox_events: %{},
        command_events: %{},
        next_seq: %{}
@@ -71,17 +79,18 @@ defmodule Garden.Sandboxes.Store do
       environment: Map.get(attrs, "environment", "linux"),
       template: Map.get(attrs, "template", "default"),
       state: "provisioning",
-      metadata: Map.get(attrs, "metadata", %{}),
-      capabilities: %{"commands" => true, "files" => false, "pty" => false},
+      metadata: Map.put(Map.get(attrs, "metadata", %{}), "backend", SandboxBackend.name()),
+      capabilities: %{"commands" => true, "files" => true, "pty" => false, "backend" => SandboxBackend.name()},
       lease: lease(ttl_ms, now),
       inserted_at: now,
       updated_at: now
     }
 
     state = put_sandbox(state, sandbox)
-    state = append_sandbox_event(state, sandbox_id, "sandbox.provisioning", %{"state" => "provisioning"})
+    state = maybe_seed_mock_filesystem(state, sandbox)
+    state = append_sandbox_event(state, sandbox_id, "sandbox.provisioning", %{"state" => "provisioning", "backend" => SandboxBackend.name()})
 
-    {:ok, _pid} = MockComputeSupervisor.start_compute(sandbox_id, self())
+    :ok = normalize_setup_result(SandboxBackend.setup_sandbox(sandbox, self()))
 
     response = %{
       sandbox: sandbox,
@@ -89,6 +98,34 @@ defmodule Garden.Sandboxes.Store do
     }
 
     {:reply, {:ok, response}, state}
+  end
+
+  def handle_call({:ensure_sandbox, id, attrs}, _from, state) do
+    case fetch_sandbox(state, id) do
+      {:ok, sandbox} ->
+        {:reply, {:ok, sandbox}, state}
+
+      {:error, :sandbox_not_found} ->
+        now = now()
+
+        sandbox = %{
+          id: id,
+          environment: Map.get(attrs, "environment", "linux"),
+          template: Map.get(attrs, "template", "default"),
+          state: Map.get(attrs, "state", "ready"),
+          metadata: Map.put(Map.get(attrs, "metadata", %{"source" => "ui_seed_session"}), "backend", SandboxBackend.name()),
+          capabilities: %{"commands" => true, "files" => true, "pty" => false, "backend" => SandboxBackend.name()},
+          lease: lease(Map.get(attrs, "ttl_ms", 30 * 60 * 1000), now),
+          inserted_at: now,
+          updated_at: now
+        }
+
+        state = put_sandbox(state, sandbox)
+        state = maybe_seed_mock_filesystem(state, sandbox)
+        :ok = normalize_setup_result(SandboxBackend.setup_sandbox(sandbox, self()))
+        state = append_sandbox_event(state, id, "sandbox.ready", %{"state" => "ready", "source" => "ensure_sandbox", "backend" => SandboxBackend.name()})
+        {:reply, {:ok, sandbox}, state}
+    end
   end
 
   def handle_call({:get_sandbox, id}, _from, state) do
@@ -125,7 +162,7 @@ defmodule Garden.Sandboxes.Store do
           "reason" => Map.get(attrs, "reason", "unspecified")
         })
 
-      MockCompute.terminate_compute(id)
+      SandboxBackend.teardown_sandbox(id)
 
       released = %{releasing | state: "released", updated_at: now()}
       state = put_sandbox(state, released)
@@ -182,8 +219,11 @@ defmodule Garden.Sandboxes.Store do
 
       state = put_command(state, command)
       state = append_command_event(state, sandbox_id, command.id, "command.queued", %{"command" => command.command})
-      :ok = MockCompute.start_command(sandbox_id, command)
-      {:reply, {:ok, command}, state}
+
+      case dispatch_or_mock_start(sandbox_id, command) do
+        :ok -> {:reply, {:ok, command}, state}
+        {:error, reason} -> {:reply, {:error, reason}, state}
+      end
     else
       {:error, _} = error -> {:reply, error, state}
     end
@@ -196,7 +236,7 @@ defmodule Garden.Sandboxes.Store do
   def handle_call({:send_stdin, sandbox_id, command_id, attrs}, _from, state) do
     with {:ok, command} <- fetch_command(state, sandbox_id, command_id),
          true <- command.stdin || {:error, :stdin_not_enabled},
-         :ok <- MockCompute.send_stdin(sandbox_id, command_id, Map.get(attrs, "data", "")) do
+         :ok <- dispatch_or_mock_stdin(sandbox_id, command_id, Map.get(attrs, "data", "")) do
       {:reply, {:ok, %{"accepted" => true}}, state}
     else
       false -> {:reply, {:error, :stdin_not_enabled}, state}
@@ -207,7 +247,7 @@ defmodule Garden.Sandboxes.Store do
   def handle_call({:cancel_command, sandbox_id, command_id, attrs}, _from, state) do
     with {:ok, command} <- fetch_command(state, sandbox_id, command_id),
          :ok <- ensure_running(command),
-         :ok <- MockCompute.cancel_command(sandbox_id, command_id, attrs) do
+         :ok <- dispatch_or_mock_cancel(sandbox_id, command_id, attrs) do
       updated = %{command | state: "cancelling", updated_at: now()}
       state = put_command(state, updated)
       {:reply, {:ok, updated}, state}
@@ -219,12 +259,40 @@ defmodule Garden.Sandboxes.Store do
   def handle_call({:kill_command, sandbox_id, command_id, _attrs}, _from, state) do
     with {:ok, command} <- fetch_command(state, sandbox_id, command_id),
          :ok <- ensure_running(command),
-         :ok <- MockCompute.kill_command(sandbox_id, command_id) do
+         :ok <- dispatch_or_mock_kill(sandbox_id, command_id) do
       updated = %{command | state: "killed", updated_at: now()}
       state = put_command(state, updated)
       {:reply, {:ok, updated}, state}
     else
       {:error, _} = error -> {:reply, error, state}
+    end
+  end
+
+  def handle_call({:list_files, sandbox_id, path}, _from, state) do
+    with {:ok, sandbox} <- fetch_sandbox(state, sandbox_id),
+         {:ok, %{entries: entries}} <- SandboxBackend.list_files(sandbox, path) do
+      {:reply, {:ok, %{path: path, entries: entries}}, state}
+    else
+      error -> {:reply, error, state}
+    end
+  end
+
+  def handle_call({:read_file, sandbox_id, path}, _from, state) do
+    with {:ok, sandbox} <- fetch_sandbox(state, sandbox_id),
+         {:ok, result} <- SandboxBackend.read_file(sandbox, path) do
+      {:reply, {:ok, result}, state}
+    else
+      error -> {:reply, error, state}
+    end
+  end
+
+  def handle_call({:write_file, sandbox_id, path, content}, _from, state) do
+    with {:ok, sandbox} <- fetch_sandbox(state, sandbox_id),
+         {:ok, result} <- SandboxBackend.write_file(sandbox, path, content) do
+      state = append_sandbox_event(state, sandbox_id, "file.written", %{"path" => path, "bytes" => byte_size(content)})
+      {:reply, {:ok, result}, state}
+    else
+      error -> {:reply, error, state}
     end
   end
 
@@ -301,6 +369,53 @@ defmodule Garden.Sandboxes.Store do
     {:noreply, state}
   end
 
+  def handle_cast({:protocol_message, _session_id, %{"sandbox_id" => sandbox_id, "type" => type, "payload" => payload}}, state) do
+    state =
+      case type do
+        "seed.register" ->
+          update_sandbox_from_protocol(state, sandbox_id, "ready")
+
+        "seed.status" ->
+          update_sandbox_from_protocol(state, sandbox_id, payload["state"])
+
+        "command.accepted" ->
+          update_command_from_protocol(state, sandbox_id, payload["command_id"], fn command ->
+            %{command | state: payload["state"] || "starting", updated_at: now()}
+          end, "command.accepted", payload)
+
+        "command.started" ->
+          update_command_from_protocol(state, sandbox_id, payload["command_id"], fn command ->
+            %{command | state: "running", pid: payload["pid"], started_at: now(), updated_at: now()}
+          end, "command.started", payload)
+
+        "command.stdout" ->
+          append_command_event(state, sandbox_id, payload["command_id"], "command.stdout", %{"chunk" => payload["chunk"]})
+
+        "command.stderr" ->
+          append_command_event(state, sandbox_id, payload["command_id"], "command.stderr", %{"chunk" => payload["chunk"]})
+
+        "command.stdin.accepted" ->
+          append_command_event(state, sandbox_id, payload["command_id"], "command.stdin.accepted", payload)
+
+        "command.exit" ->
+          finish_protocol_command(state, sandbox_id, payload["command_id"], :exited, %{exit_code: payload["exit_code"]})
+
+        "command.failed" ->
+          finish_protocol_command(state, sandbox_id, payload["command_id"], :failed, %{exit_code: payload["exit_code"]})
+
+        "command.cancelled" ->
+          finish_protocol_command(state, sandbox_id, payload["command_id"], :killed, %{})
+
+        "command.killed" ->
+          finish_protocol_command(state, sandbox_id, payload["command_id"], :killed, %{signal: payload["signal"]})
+
+        _ ->
+          state
+      end
+
+    {:noreply, state}
+  end
+
   def handle_cast({:command_finished, sandbox_id, command_id, status, attrs}, state) do
     case fetch_command(state, sandbox_id, command_id) do
       {:ok, command} when command.state in ["exited", "failed", "killed"] ->
@@ -336,6 +451,163 @@ defmodule Garden.Sandboxes.Store do
     end
   end
 
+  defp dispatch_or_mock_start(sandbox_id, command) do
+    case SeedSessions.find_by_sandbox(sandbox_id) do
+      {:ok, %{status: :connected} = session} ->
+        SeedSessions.dispatch(session.session_id, "command.start", %{
+          "command_id" => command.id,
+          "command" => command.command,
+          "cwd" => command.cwd,
+          "env" => command.env,
+          "stdin" => command.stdin,
+          "timeout_ms" => command.timeout_ms,
+          "metadata" => command.metadata
+        })
+        :ok
+
+      _ ->
+        SandboxBackend.start_command(sandbox_id, command)
+    end
+  end
+
+  defp dispatch_or_mock_stdin(sandbox_id, command_id, data) do
+    case SeedSessions.find_by_sandbox(sandbox_id) do
+      {:ok, %{status: :connected} = session} ->
+        SeedSessions.dispatch(session.session_id, "command.stdin", %{"command_id" => command_id, "data" => data, "encoding" => "utf-8"})
+        :ok
+
+      _ ->
+        SandboxBackend.send_stdin(sandbox_id, command_id, data)
+    end
+  end
+
+  defp dispatch_or_mock_cancel(sandbox_id, command_id, attrs) do
+    case SeedSessions.find_by_sandbox(sandbox_id) do
+      {:ok, %{status: :connected} = session} ->
+        SeedSessions.dispatch(session.session_id, "command.cancel", %{"command_id" => command_id, "grace_period_ms" => Map.get(attrs, "grace_period_ms", 5_000), "escalation" => "kill"})
+        :ok
+
+      _ ->
+        SandboxBackend.cancel_command(sandbox_id, command_id, attrs)
+    end
+  end
+
+  defp dispatch_or_mock_kill(sandbox_id, command_id) do
+    case SeedSessions.find_by_sandbox(sandbox_id) do
+      {:ok, %{status: :connected} = session} ->
+        SeedSessions.dispatch(session.session_id, "command.kill", %{"command_id" => command_id})
+        :ok
+
+      _ ->
+        SandboxBackend.kill_command(sandbox_id, command_id)
+    end
+  end
+
+  defp update_sandbox_from_protocol(state, sandbox_id, sandbox_state) when is_binary(sandbox_state) do
+    case fetch_sandbox(state, sandbox_id) do
+      {:ok, sandbox} -> put_sandbox(state, %{sandbox | state: sandbox_state, updated_at: now()})
+      _ -> state
+    end
+  end
+
+  defp update_sandbox_from_protocol(state, _sandbox_id, _sandbox_state), do: state
+
+  defp update_command_from_protocol(state, sandbox_id, command_id, fun, event_type, payload) do
+    case fetch_command(state, sandbox_id, command_id) do
+      {:ok, command} ->
+        state
+        |> put_command(fun.(command))
+        |> append_command_event(sandbox_id, command_id, event_type, payload)
+        |> touch_lease(sandbox_id, event_type)
+
+      _ ->
+        state
+    end
+  end
+
+  defp finish_protocol_command(state, sandbox_id, command_id, status, attrs) do
+    case fetch_command(state, sandbox_id, command_id) do
+      {:ok, command} ->
+        updated =
+          command
+          |> Map.put(:state, Atom.to_string(status))
+          |> Map.put(:completed_at, now())
+          |> Map.put(:updated_at, now())
+          |> Map.put(:exit_code, Map.get(attrs, :exit_code))
+          |> Map.put(:signal, Map.get(attrs, :signal))
+
+        event_type =
+          case status do
+            :exited -> "command.exit"
+            :failed -> "command.failed"
+            :killed -> "command.killed"
+          end
+
+        payload = %{}
+        |> maybe_put("exit_code", updated.exit_code)
+        |> maybe_put("signal", updated.signal)
+
+        state
+        |> put_command(updated)
+        |> append_command_event(sandbox_id, command_id, event_type, payload)
+        |> touch_lease(sandbox_id, event_type)
+
+      _ ->
+        state
+    end
+  end
+
+  defp maybe_seed_mock_filesystem(state, sandbox) do
+    case SandboxBackend.name() do
+      "mock" -> put_filesystem(state, sandbox.id, default_filesystem(sandbox.id))
+      _ -> state
+    end
+  end
+
+  defp normalize_setup_result(:ok), do: :ok
+  defp normalize_setup_result({:ok, _pid}), do: :ok
+  defp normalize_setup_result(other), do: other
+
+  defp put_filesystem(state, sandbox_id, filesystem) do
+    put_in(state, [:filesystems, sandbox_id], filesystem)
+  end
+
+  defp fetch_file_content(state, sandbox_id, path) do
+    case get_in(state, [:filesystems, sandbox_id, path]) do
+      nil -> {:error, :file_not_found}
+      content -> {:ok, content}
+    end
+  end
+
+  defp put_file_content(state, sandbox_id, path, content) do
+    update_in(state, [:filesystems], fn filesystems ->
+      Map.update(filesystems, sandbox_id, %{path => content}, &Map.put(&1, path, content))
+    end)
+  end
+
+  defp list_filesystem_entries(state, sandbox_id, path) do
+    files = Map.get(state.filesystems, sandbox_id, %{})
+    prefix = String.trim_trailing(path, "/") <> "/"
+
+    entries =
+      files
+      |> Map.keys()
+      |> Enum.filter(&String.starts_with?(&1, prefix))
+      |> Enum.map(&String.replace_prefix(&1, prefix, ""))
+      |> Enum.reject(&String.contains?(&1, "/"))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    {:ok, entries}
+  end
+
+  defp default_filesystem(sandbox_id) do
+    %{
+      "/workspace/README.txt" => "Sandbox #{sandbox_id}\n",
+      "/workspace/notes.txt" => "hello from garden\n"
+    }
+  end
+
   defp fetch_sandbox(state, id) do
     case Map.fetch(state.sandboxes, id) do
       {:ok, sandbox} -> {:ok, sandbox}
@@ -357,10 +629,13 @@ defmodule Garden.Sandboxes.Store do
   defp ensure_running(_command), do: {:error, :command_not_running}
 
   defp put_sandbox(state, sandbox) do
+    Persistence.persist_sandbox(sandbox)
     put_in(state, [:sandboxes, sandbox.id], sandbox)
   end
 
   defp put_command(state, command) do
+    Persistence.persist_command(command)
+
     update_in(state, [:commands], fn commands ->
       Map.update(commands, command.sandbox_id, %{command.id => command}, &Map.put(&1, command.id, command))
     end)
@@ -368,12 +643,14 @@ defmodule Garden.Sandboxes.Store do
 
   defp append_sandbox_event(state, sandbox_id, type, data) do
     {state, event} = next_event(state, sandbox_id, type, data, nil)
+    Persistence.persist_sandbox_event(event)
     broadcast(Sandboxes.sandbox_topic(sandbox_id), event)
     update_in(state, [:sandbox_events, sandbox_id], fn events -> (events || []) ++ [event] end)
   end
 
   defp append_command_event(state, sandbox_id, command_id, type, data) do
     {state, event} = next_event(state, sandbox_id, type, data, command_id)
+    Persistence.persist_command_event(event)
     broadcast(Sandboxes.command_topic(sandbox_id, command_id), event)
     update_in(state, [:command_events, {sandbox_id, command_id}], fn events -> (events || []) ++ [event] end)
   end

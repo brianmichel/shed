@@ -20,6 +20,10 @@ defmodule Garden.Sandboxes do
     Store.acquire_sandbox(attrs)
   end
 
+  def ensure_sandbox(id, attrs \\ %{}) do
+    Store.ensure_sandbox(id, attrs)
+  end
+
   def get_sandbox(id) do
     Store.get_sandbox(id)
   end
@@ -62,5 +66,17 @@ defmodule Garden.Sandboxes do
 
   def list_command_events(sandbox_id, command_id, opts \\ %{}) do
     Store.list_command_events(sandbox_id, command_id, opts)
+  end
+
+  def list_files(sandbox_id, path \\ "/workspace") do
+    Store.list_files(sandbox_id, path)
+  end
+
+  def read_file(sandbox_id, path) do
+    Store.read_file(sandbox_id, path)
+  end
+
+  def write_file(sandbox_id, path, content) do
+    Store.write_file(sandbox_id, path, content)
   end
 end

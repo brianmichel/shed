@@ -1,6 +1,9 @@
 import Config
 
 # Configure your database
+config :garden,
+  sandbox_backend: Garden.SandboxBackend.LocalHost
+
 config :garden, Garden.Repo,
   username: "postgres",
   password: "postgres",

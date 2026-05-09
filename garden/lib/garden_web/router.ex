@@ -18,6 +18,10 @@ defmodule GardenWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    get "/api/openapi.json", OpenAPIController, :show
+    live "/seed/sessions", SeedSessionLive.Index, :index
+    live "/seed/sessions/:session_id", SeedSessionLive.Show, :show
+    live "/sandboxes/:sandbox_id/console", SandboxConsoleLive.Show, :show
   end
 
   scope "/api/v1", GardenWeb.Api.V1 do
@@ -27,6 +31,10 @@ defmodule GardenWeb.Router do
       post "/release", SandboxController, :release
       post "/lease", SandboxController, :lease
       get "/events", SandboxController, :events
+
+      get "/files", FileController, :index
+      get "/files/content", FileController, :show
+      put "/files/content", FileController, :update
 
       resources "/commands", CommandController, only: [:index, :create, :show], param: "command_id" do
         post "/stdin", CommandController, :stdin
