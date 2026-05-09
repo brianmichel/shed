@@ -76,11 +76,10 @@ defmodule Garden.MixProject do
   #
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
-    [
+    base = [
       setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
       "ecto.setup": ["ecto.create", "ecto.migrate", "run priv/repo/seeds.exs"],
       "ecto.reset": ["ecto.drop", "ecto.setup"],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind garden", "esbuild garden"],
       "assets.deploy": [
@@ -90,5 +89,11 @@ defmodule Garden.MixProject do
       ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
+
+    if Mix.env() == :test do
+      base
+    else
+      Keyword.put(base, :test, ["ecto.create --quiet", "ecto.migrate --quiet", "test"])
+    end
   end
 end

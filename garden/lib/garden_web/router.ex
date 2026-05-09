@@ -20,10 +20,22 @@ defmodule GardenWeb.Router do
     get "/", PageController, :home
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", GardenWeb do
-  #   pipe_through :api
-  # end
+  scope "/api/v1", GardenWeb.Api.V1 do
+    pipe_through :api
+
+    resources "/sandboxes", SandboxController, only: [:index, :create, :show], param: "sandbox_id" do
+      post "/release", SandboxController, :release
+      post "/lease", SandboxController, :lease
+      get "/events", SandboxController, :events
+
+      resources "/commands", CommandController, only: [:index, :create, :show], param: "command_id" do
+        post "/stdin", CommandController, :stdin
+        post "/cancel", CommandController, :cancel
+        post "/kill", CommandController, :kill
+        get "/events", CommandController, :events
+      end
+    end
+  end
 
   # Enable LiveDashboard and Swoosh mailbox preview in development
   if Application.compile_env(:garden, :dev_routes) do

@@ -7,21 +7,30 @@ defmodule Garden.Application do
 
   @impl true
   def start(_type, _args) do
-    children = [
-      GardenWeb.Telemetry,
-      Garden.Repo,
-      {DNSCluster, query: Application.get_env(:garden, :dns_cluster_query) || :ignore},
-      {Phoenix.PubSub, name: Garden.PubSub},
-      # Start a worker by calling: Garden.Worker.start_link(arg)
-      # {Garden.Worker, arg},
-      # Start to serve requests, typically the last entry
-      GardenWeb.Endpoint
-    ]
+    children =
+      [
+        GardenWeb.Telemetry,
+        {DNSCluster, query: Application.get_env(:garden, :dns_cluster_query) || :ignore},
+        {Phoenix.PubSub, name: Garden.PubSub},
+        Garden.Sandboxes.MockComputeSupervisor,
+        Garden.Sandboxes.Store,
+        # Start to serve requests, typically the last entry
+        GardenWeb.Endpoint
+      ]
+      |> maybe_add_repo()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Garden.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp maybe_add_repo(children) do
+    if Application.get_env(:garden, :start_repo, true) do
+      List.insert_at(children, 1, Garden.Repo)
+    else
+      children
+    end
   end
 
   # Tell Phoenix to update the endpoint configuration

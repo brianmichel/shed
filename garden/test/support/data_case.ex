@@ -36,8 +36,12 @@ defmodule Garden.DataCase do
   Sets up the sandbox based on the test tags.
   """
   def setup_sandbox(tags) do
-    pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Garden.Repo, shared: not tags[:async])
-    on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+    if Application.get_env(:garden, :start_repo, true) do
+      pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Garden.Repo, shared: not tags[:async])
+      on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
+    else
+      :ok
+    end
   end
 
   @doc """
