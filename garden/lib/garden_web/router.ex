@@ -24,6 +24,11 @@ defmodule GardenWeb.Router do
     live "/sandboxes/:sandbox_id/console", SandboxConsoleLive.Show, :show
   end
 
+  scope "/" do
+    pipe_through :browser
+    get "/api/docs", OpenApiSpex.Plug.SwaggerUI, path: "/api/openapi.json"
+  end
+
   scope "/api/v1", GardenWeb.Api.V1 do
     pipe_through :api
 
