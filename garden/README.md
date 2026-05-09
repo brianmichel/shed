@@ -8,6 +8,11 @@ This document captures the initial Phoenix-oriented API draft for:
 - starting, observing, and controlling commands
 - streaming durable events over unreliable networks
 
+
+## Prototype scope guidance
+
+- See `docs/prototype-focus.md` for a practical keep-vs-cut framework for the current prototyping phase.
+
 ## Design constraints
 
 The v1 API assumes:
