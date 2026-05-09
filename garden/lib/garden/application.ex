@@ -14,8 +14,7 @@ defmodule Garden.Application do
         {Phoenix.PubSub, name: Garden.PubSub},
         Garden.SeedSessions.Store,
         Garden.SeedSimulatorSupervisor,
-        Garden.Sandboxes.MockComputeSupervisor,
-        Garden.Sandboxes.LocalHostRuntimeSupervisor,
+        runtime_supervisor(),
         Garden.Sandboxes.Store,
         # Start to serve requests, typically the last entry
         GardenWeb.Endpoint
@@ -26,6 +25,14 @@ defmodule Garden.Application do
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Garden.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  defp runtime_supervisor do
+    case Application.get_env(:garden, :runtime_mode, :mock) do
+      :mock -> Garden.Sandboxes.MockComputeSupervisor
+      :local_host -> Garden.Sandboxes.LocalHostRuntimeSupervisor
+      mode -> raise ArgumentError, "unsupported :runtime_mode #{inspect(mode)}; expected :mock or :local_host"
+    end
   end
 
   defp maybe_add_repo(children) do

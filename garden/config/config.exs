@@ -10,7 +10,8 @@ import Config
 config :garden,
   ecto_repos: [Garden.Repo],
   generators: [timestamp_type: :utc_datetime],
-  guardrails: Garden.Guardrails.Default
+  guardrails: Garden.Guardrails.Default,
+  runtime_mode: :mock
 
 # Configure the endpoint
 config :garden, GardenWeb.Endpoint,
