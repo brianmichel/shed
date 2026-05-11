@@ -14,7 +14,14 @@ defmodule Garden.SandboxBackend.LocalHost do
     root = workspace_root(sandbox)
     File.mkdir_p!(root)
     seed_files(root, sandbox.id)
-    LocalHostRuntime.ensure_started(sandbox.id, store, root, sandbox)
+    session =
+      case Garden.SeedSessions.find_by_sandbox(sandbox.id) do
+        {:ok, %{status: status} = s} when status in [:issued, :connected] -> s
+        _ ->
+          {:ok, s} = Garden.SeedSessions.issue_session(sandbox.id)
+          s
+      end
+    LocalHostRuntime.ensure_started(sandbox.id, store, root, sandbox, session)
   end
 
   @impl true

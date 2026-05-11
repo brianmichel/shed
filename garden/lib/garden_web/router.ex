@@ -14,6 +14,10 @@ defmodule GardenWeb.Router do
     plug :accepts, ["json"]
   end
 
+  scope "/ws", GardenWeb do
+    get "/seed", SeedWebSocketController, :upgrade
+  end
+
   scope "/", GardenWeb do
     pipe_through :browser
 

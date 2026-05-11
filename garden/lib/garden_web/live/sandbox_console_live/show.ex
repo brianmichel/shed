@@ -9,6 +9,7 @@ defmodule GardenWeb.SandboxConsoleLive.Show do
       Phoenix.PubSub.subscribe(Garden.PubSub, Sandboxes.sandbox_topic(sandbox_id))
     end
 
+    {:ok, _} = Sandboxes.ensure_sandbox(sandbox_id)
     {:ok, load(socket, sandbox_id)}
   end
 
@@ -66,7 +67,6 @@ defmodule GardenWeb.SandboxConsoleLive.Show do
   end
 
   defp load(socket, sandbox_id) do
-    {:ok, _} = Sandboxes.ensure_sandbox(sandbox_id)
     sandbox = case Sandboxes.get_sandbox(sandbox_id) do {:ok, sbx} -> sbx; _ -> nil end
     commands = case Sandboxes.list_commands(sandbox_id) do {:ok, cmds} -> cmds; _ -> [] end
     files = case Sandboxes.list_files(sandbox_id, "/workspace") do {:ok, %{entries: entries}} -> entries; _ -> [] end

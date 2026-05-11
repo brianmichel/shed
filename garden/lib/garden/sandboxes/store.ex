@@ -33,6 +33,9 @@ defmodule Garden.Sandboxes.Store do
   def protocol_message(session_id, message), do: GenServer.cast(__MODULE__, {:protocol_message, session_id, message})
 
   @sweep_interval_ms 30_000
+  @max_lease_ms 7_200_000
+  @lease_warning_ms 300_000
+  @lease_expiring_ms 60_000
 
   @impl true
   def init(_arg) do
@@ -44,7 +47,8 @@ defmodule Garden.Sandboxes.Store do
        filesystems: %{},
        sandbox_events: %{},
        command_events: %{},
-       next_seq: %{}
+       next_seq: %{},
+       lease_warnings: %{}
      }}
   end
 
@@ -59,7 +63,8 @@ defmodule Garden.Sandboxes.Store do
        filesystems: %{},
        sandbox_events: %{},
        command_events: %{},
-       next_seq: %{}
+       next_seq: %{},
+       lease_warnings: %{}
      }}
   end
 
@@ -138,9 +143,12 @@ defmodule Garden.Sandboxes.Store do
   def handle_call({:extend_lease, id, attrs}, _from, state) do
     with {:ok, sandbox} <- fetch_sandbox(state, id) do
       ttl_ms = Map.get(attrs, "ttl_ms", sandbox.lease["ttl_ms"])
-      updated = %{sandbox | lease: lease(ttl_ms, now()), updated_at: now()}
+      now = now()
+      updated_lease = capped_lease(ttl_ms, now, sandbox.inserted_at)
+      updated = %{sandbox | lease: updated_lease, updated_at: now}
 
       state = put_sandbox(state, updated)
+      state = %{state | lease_warnings: Map.delete(state.lease_warnings, id)}
 
       state =
         append_sandbox_event(state, id, "sandbox.lease.extended", %{
@@ -461,16 +469,33 @@ defmodule Garden.Sandboxes.Store do
     state =
       state.sandboxes
       |> Map.values()
-      |> Enum.filter(&(&1.state not in ["releasing", "released", "failed"] and lease_expired?(&1, now)))
+      |> Enum.filter(&(&1.state not in ["releasing", "released", "failed"]))
       |> Enum.reduce(state, fn sandbox, acc ->
         id = sandbox.id
-        releasing = %{sandbox | state: "releasing", updated_at: now}
-        acc = put_sandbox(acc, releasing)
-        acc = append_sandbox_event(acc, id, "sandbox.release.requested", %{"reason" => "lease_expired"})
-        SandboxBackend.teardown_sandbox(id)
-        released = %{releasing | state: "released", updated_at: now}
-        acc = put_sandbox(acc, released)
-        append_sandbox_event(acc, id, "sandbox.released", %{"state" => "released"})
+        remaining_ms = remaining_lease_ms(sandbox, now)
+        warnings = Map.get(acc.lease_warnings, id, MapSet.new())
+
+        cond do
+          remaining_ms <= 0 ->
+            releasing = %{sandbox | state: "releasing", updated_at: now}
+            acc = put_sandbox(acc, releasing)
+            acc = append_sandbox_event(acc, id, "sandbox.release.requested", %{"reason" => "lease_expired"})
+            SandboxBackend.teardown_sandbox(id)
+            released = %{releasing | state: "released", updated_at: now}
+            acc = put_sandbox(acc, released)
+            append_sandbox_event(acc, id, "sandbox.released", %{"state" => "released"})
+
+          remaining_ms <= @lease_expiring_ms and not MapSet.member?(warnings, :expiring) ->
+            dispatch_lease_warning(id, "garden.lease_expiring", remaining_ms)
+            %{acc | lease_warnings: Map.put(acc.lease_warnings, id, MapSet.put(warnings, :expiring))}
+
+          remaining_ms <= @lease_warning_ms and not MapSet.member?(warnings, :warning) ->
+            dispatch_lease_warning(id, "garden.lease_warning", remaining_ms)
+            %{acc | lease_warnings: Map.put(acc.lease_warnings, id, MapSet.put(warnings, :warning))}
+
+          true ->
+            acc
+        end
       end)
 
     schedule_lease_sweep()
@@ -531,8 +556,12 @@ defmodule Garden.Sandboxes.Store do
 
   defp update_sandbox_from_protocol(state, sandbox_id, sandbox_state) when is_binary(sandbox_state) do
     case fetch_sandbox(state, sandbox_id) do
-      {:ok, sandbox} -> put_sandbox(state, %{sandbox | state: sandbox_state, updated_at: now()})
-      _ -> state
+      {:ok, sandbox} ->
+        updated = %{sandbox | state: sandbox_state, updated_at: now()}
+        state = put_sandbox(state, updated)
+        append_sandbox_event(state, sandbox_id, "sandbox.#{sandbox_state}", %{"state" => sandbox_state})
+      _ ->
+        state
     end
   end
 
@@ -690,14 +719,23 @@ defmodule Garden.Sandboxes.Store do
   defp touch_lease(state, sandbox_id, reason) do
     case fetch_sandbox(state, sandbox_id) do
       {:ok, sandbox} ->
+        now = now()
         ttl_ms = sandbox.lease["ttl_ms"]
-        updated = %{sandbox | lease: lease(ttl_ms, now()), updated_at: now()}
+        updated = %{sandbox | lease: capped_lease(ttl_ms, now, sandbox.inserted_at), updated_at: now}
         state = put_sandbox(state, updated)
+        state = %{state | lease_warnings: Map.delete(state.lease_warnings, sandbox_id)}
         append_sandbox_event(state, sandbox_id, "sandbox.lease.extended", %{"ttl_ms" => ttl_ms, "reason" => reason, "expires_at" => updated.lease["expires_at"]})
 
       _ ->
         state
     end
+  end
+
+  defp capped_lease(ttl_ms, from, inserted_at) do
+    max_expires = DateTime.add(inserted_at, @max_lease_ms, :millisecond)
+    raw_expires = DateTime.add(from, ttl_ms, :millisecond)
+    expires = if DateTime.compare(raw_expires, max_expires) == :gt, do: max_expires, else: raw_expires
+    %{"ttl_ms" => ttl_ms, "expires_at" => DateTime.to_iso8601(expires)}
   end
 
   defp lease(ttl_ms, from) do
@@ -716,10 +754,22 @@ defmodule Garden.Sandboxes.Store do
 
   defp schedule_lease_sweep, do: Process.send_after(self(), :sweep_leases, @sweep_interval_ms)
 
-  defp lease_expired?(sandbox, now) do
+  defp remaining_lease_ms(sandbox, now) do
     case DateTime.from_iso8601(sandbox.lease["expires_at"]) do
-      {:ok, expires_at, _} -> DateTime.compare(now, expires_at) == :gt
-      _ -> false
+      {:ok, expires_at, _} -> DateTime.diff(expires_at, now, :millisecond)
+      _ -> 0
+    end
+  end
+
+  defp dispatch_lease_warning(sandbox_id, type, remaining_ms) do
+    case SeedSessions.find_by_sandbox(sandbox_id) do
+      {:ok, %{status: :connected} = session} ->
+        SeedSessions.dispatch(session.session_id, type, %{
+          "sandbox_id" => sandbox_id,
+          "remaining_ms" => remaining_ms
+        })
+      _ ->
+        :ok
     end
   end
 

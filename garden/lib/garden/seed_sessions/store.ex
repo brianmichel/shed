@@ -32,11 +32,17 @@ defmodule Garden.SeedSessions.Store do
   end
 
   def handle_call({:find_by_sandbox, sandbox_id}, _from, state) do
+    status_rank = fn
+      :connected -> 2
+      :issued -> 1
+      _ -> 0
+    end
+
     session =
       state.sessions
       |> Map.values()
       |> Enum.filter(&(&1.sandbox_id == sandbox_id))
-      |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+      |> Enum.sort_by(&{status_rank.(&1.status), &1.updated_at}, :desc)
       |> List.first()
 
     {:reply, if(session, do: {:ok, session}, else: {:error, :session_not_found}), state}

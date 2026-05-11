@@ -6,76 +6,7 @@ defmodule Garden.SeedProtocol.Message do
   use Ecto.Schema
   import Ecto.Changeset
 
-  alias Garden.SeedProtocol.Payloads
-
-  @types ~w(
-    ack
-    error
-    seed.hello
-    garden.hello
-    seed.register
-    garden.registered
-    seed.resume
-    garden.resume
-    seed.capabilities
-    seed.status
-    seed.heartbeat
-    garden.heartbeat_ack
-    seed.metrics
-    seed.warning
-    seed.activity
-    garden.lease_extended
-    garden.lease_warning
-    garden.lease_expiring
-    command.start
-    command.accepted
-    command.started
-    command.stdout
-    command.stderr
-    command.stdin
-    command.stdin.accepted
-    command.cancel
-    command.kill
-    command.exit
-    command.failed
-    command.cancelled
-    command.killed
-    file.read
-    file.write
-    file.edit
-    file.stat
-    file.search
-    file.list
-    file.delete
-    file.mkdir
-    file.result
-    file.chunk
-    file.error
-    pty.create
-    pty.input
-    pty.resize
-    pty.close
-    pty.created
-    pty.output
-    pty.exit
-    pty.error
-    port.open
-    port.close
-    port.describe
-    port.opened
-    port.closed
-    port.status
-    artifact.upload
-    artifact.download
-    snapshot.create
-    artifact.ready
-    artifact.failed
-    snapshot.created
-    garden.drain
-    seed.draining
-    garden.shutdown
-    seed.goodbye
-  )
+  alias Garden.SeedProtocol.{Payloads, Registry}
 
   @primary_key false
   embedded_schema do
@@ -98,7 +29,9 @@ defmodule Garden.SeedProtocol.Message do
     |> cast(params, [:version, :type, :message_id, :ack_id, :request_id, :session_id, :sandbox_id, :seq, :timestamp, :expects_ack, :reply_to, :payload])
     |> validate_required([:version, :type, :message_id, :request_id, :session_id, :sandbox_id, :seq, :timestamp, :payload])
     |> validate_inclusion(:version, ["1"])
-    |> validate_inclusion(:type, @types)
+    |> validate_change(:type, fn :type, type ->
+      if type in Registry.all_types(), do: [], else: [type: "is invalid"]
+    end)
     |> validate_number(:seq, greater_than: 0)
     |> validate_payload()
   end
@@ -113,7 +46,7 @@ defmodule Garden.SeedProtocol.Message do
     end
   end
 
-  def types, do: @types
+  def types, do: Registry.all_types()
 
   def to_map(message) do
     %{

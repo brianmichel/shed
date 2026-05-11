@@ -18,7 +18,12 @@ defmodule GardenWeb.SeedSessionLive.Index do
   def handle_event("issue_session", %{"sandbox_id" => sandbox_id}, socket) do
     sandbox_id = if String.trim(sandbox_id) == "", do: random_sandbox_id(), else: sandbox_id
     {:ok, _sandbox} = Sandboxes.ensure_sandbox(sandbox_id)
-    {:ok, _session} = SeedSessions.issue_session(sandbox_id)
+    # ensure_sandbox calls setup_sandbox for LocalHost which issues a session internally;
+    # only issue explicitly if no active session exists (mock backend path)
+    case SeedSessions.find_by_sandbox(sandbox_id) do
+      {:ok, %{status: status}} when status in [:issued, :connected] -> :ok
+      _ -> SeedSessions.issue_session(sandbox_id)
+    end
     {:noreply, assign(socket, sandbox_id: random_sandbox_id())}
   end
 

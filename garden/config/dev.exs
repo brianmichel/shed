@@ -2,7 +2,9 @@ import Config
 
 # Configure your database
 config :garden,
-  sandbox_backend: Garden.SandboxBackend.LocalHost
+  sandbox_backend: Garden.SandboxBackend.LocalHost,
+  seed_binary: Path.expand("../../seed/seed", __DIR__),
+  seed_websocket_url: "ws://localhost:4000/ws/seed"
 
 config :garden, Garden.Repo,
   username: "postgres",
