@@ -1,0 +1,19 @@
+[tools]
+uv = "latest"
+python = "3.12"
+
+[tasks.generate]
+description = "Generate Garden and Seed code from top-level specs"
+run = "uv run python scripts/generate_specs.py all"
+
+[tasks."generate:protocol"]
+description = "Generate websocket/protocol code from spec/protocol/messages.json"
+run = "uv run python scripts/generate_specs.py protocol"
+
+[tasks."generate:api"]
+description = "Generate Garden OpenAPI module from spec/api/openapi.json"
+run = "uv run python scripts/generate_specs.py api"
+
+[tasks."check:generated"]
+description = "Fail if generated files are stale"
+run = "uv run python scripts/generate_specs.py check"

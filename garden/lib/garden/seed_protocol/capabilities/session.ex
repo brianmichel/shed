@@ -8,44 +8,43 @@ defmodule Garden.SeedProtocol.Capabilities.Session do
   @impl true
   def name, do: :session
 
-  # Seed -> Garden messages.
+  @impl true
   def inbound_messages do
     [
-      # Seed initiates protocol handshake and identifies runtime.
-      "seed.hello",
-      # Seed registers runtime metadata for the session.
-      "seed.register",
-      # Seed requests resume after reconnect.
-      "seed.resume",
-      # Seed advertises feature support/capabilities.
-      "seed.capabilities",
-      # Seed publishes runtime status snapshot.
-      "seed.status",
-      # Seed heartbeat for liveness + sequence watermarks.
-      "seed.heartbeat",
-      # Seed publishes resource/network metrics sample.
-      "seed.metrics",
-      # Seed emits a non-fatal warning.
-      "seed.warning",
-      # Seed reports meaningful activity for lease heuristics.
-      "seed.activity"
-    ]
+          # Seed initiates protocol handshake and identifies runtime.
+          "seed.hello",
+          # Seed registers runtime metadata for the session.
+          "seed.register",
+          # Seed requests session resume after reconnect.
+          "seed.resume",
+          # Seed advertises feature support and capabilities.
+          "seed.capabilities",
+          # Seed publishes a runtime status snapshot.
+          "seed.status",
+          # Seed heartbeat for liveness and sequence watermarks.
+          "seed.heartbeat",
+          # Seed publishes a resource and network metrics sample.
+          "seed.metrics",
+          # Seed emits a non-fatal warning.
+          "seed.warning",
+          # Seed reports meaningful activity for lease heuristics.
+          "seed.activity"
+        ]
   end
 
-  # Garden -> Seed messages.
+  @impl true
   def outbound_messages do
     [
-      # Garden handshake response with session settings.
-      "garden.hello",
-      # Garden confirms registration/session binding.
-      "garden.registered",
-      # Garden responds with resume outcome/replay hints.
-      "garden.resume",
-      # Garden acknowledges heartbeat and returns lease context.
-      "garden.heartbeat_ack"
-    ]
+          # Garden handshake response with session timing settings.
+          "garden.hello",
+          # Garden confirms registration and active session binding.
+          "garden.registered",
+          # Garden responds with resume outcome and replay hints.
+          "garden.resume",
+          # Garden acknowledges heartbeat and returns lease context.
+          "garden.heartbeat_ack"
+        ]
   end
-
   @impl true
   def payload_schemas do
     %{
@@ -64,5 +63,4 @@ defmodule Garden.SeedProtocol.Capabilities.Session do
       "seed.activity" => %{fields: [kind: :string, command_id: :string, at: :string], required: [:kind, :at], inclusion: %{kind: ["command_output", "stdin", "file_op", "session_active"]}}
     }
   end
-
 end

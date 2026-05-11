@@ -8,21 +8,17 @@ defmodule Garden.SeedProtocol.Capabilities.Lease do
   @impl true
   def name, do: :lease
 
-  # Seed -> Garden messages.
-  def inbound_messages, do: []
-
-  # Garden -> Seed messages.
+  @impl true
   def outbound_messages do
     [
-      # Notifies Seed that the sandbox lease was extended.
-      "garden.lease_extended",
-      # Warns Seed that lease expiry is approaching.
-      "garden.lease_warning",
-      # Signals imminent lease expiry and expected action.
-      "garden.lease_expiring"
-    ]
+          # Notifies Seed that the sandbox lease was extended.
+          "garden.lease_extended",
+          # Warns Seed that lease expiry is approaching.
+          "garden.lease_warning",
+          # Signals imminent lease expiry and expected action.
+          "garden.lease_expiring"
+        ]
   end
-
   @impl true
   def payload_schemas do
     %{
@@ -31,5 +27,4 @@ defmodule Garden.SeedProtocol.Capabilities.Lease do
       "garden.lease_expiring" => %{fields: [lease_expires_at: :string, remaining_ms: :integer, action: :string], required: [:lease_expires_at, :remaining_ms, :action]}
     }
   end
-
 end

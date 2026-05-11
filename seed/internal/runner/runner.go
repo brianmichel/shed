@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/brianmichel/shed/seed/internal/protocol"
 )
 
 // SendFunc is the callback a Runner uses to push messages back to Garden.
@@ -26,14 +28,14 @@ type Config struct {
 
 // Runner executes a single OS command and streams output back via Send.
 type Runner struct {
-	cfg        Config
-	cmd        *exec.Cmd
-	stdin      io.WriteCloser
-	mu         sync.Mutex
-	done       chan struct{}
-	startedAt  time.Time
-	stdoutSeq  atomic.Int64
-	stderrSeq  atomic.Int64
+	cfg       Config
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	mu        sync.Mutex
+	done      chan struct{}
+	startedAt time.Time
+	stdoutSeq atomic.Int64
+	stderrSeq atomic.Int64
 }
 
 func New(cfg Config) *Runner {
@@ -41,7 +43,7 @@ func New(cfg Config) *Runner {
 }
 
 func (r *Runner) Run() {
-	r.cfg.Send("command.accepted", map[string]any{
+	r.cfg.Send(protocol.CommandAccepted, map[string]any{
 		"command_id": r.cfg.CommandID,
 		"state":      "starting",
 	})
@@ -56,7 +58,7 @@ func (r *Runner) Run() {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		r.cfg.Send("command.failed", map[string]any{
+		r.cfg.Send(protocol.CommandFailed, map[string]any{
 			"command_id":   r.cfg.CommandID,
 			"message":      err.Error(),
 			"completed_at": now(),
@@ -65,7 +67,7 @@ func (r *Runner) Run() {
 	}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		r.cfg.Send("command.failed", map[string]any{
+		r.cfg.Send(protocol.CommandFailed, map[string]any{
 			"command_id":   r.cfg.CommandID,
 			"message":      err.Error(),
 			"completed_at": now(),
@@ -78,7 +80,7 @@ func (r *Runner) Run() {
 	}
 
 	if err := cmd.Start(); err != nil {
-		r.cfg.Send("command.failed", map[string]any{
+		r.cfg.Send(protocol.CommandFailed, map[string]any{
 			"command_id":   r.cfg.CommandID,
 			"message":      err.Error(),
 			"completed_at": now(),
@@ -91,7 +93,7 @@ func (r *Runner) Run() {
 	r.startedAt = time.Now()
 	r.mu.Unlock()
 
-	r.cfg.Send("command.started", map[string]any{
+	r.cfg.Send(protocol.CommandStarted, map[string]any{
 		"command_id": r.cfg.CommandID,
 		"pid":        cmd.Process.Pid,
 		"started_at": r.startedAt.UTC().Format(time.RFC3339),
@@ -99,27 +101,27 @@ func (r *Runner) Run() {
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go r.streamOutput(stdout, "command.stdout", &r.stdoutSeq, &wg)
-	go r.streamOutput(stderr, "command.stderr", &r.stderrSeq, &wg)
+	go r.streamOutput(stdout, protocol.CommandStdout, &r.stdoutSeq, &wg)
+	go r.streamOutput(stderr, protocol.CommandStderr, &r.stderrSeq, &wg)
 	wg.Wait()
 
 	completedAt := now()
 	if err := cmd.Wait(); err != nil {
 		if exitErr, ok := err.(*exec.ExitError); ok {
-			r.cfg.Send("command.exit", map[string]any{
+			r.cfg.Send(protocol.CommandExit, map[string]any{
 				"command_id":   r.cfg.CommandID,
 				"exit_code":    exitErr.ExitCode(),
 				"completed_at": completedAt,
 			})
 		} else {
-			r.cfg.Send("command.failed", map[string]any{
+			r.cfg.Send(protocol.CommandFailed, map[string]any{
 				"command_id":   r.cfg.CommandID,
 				"message":      err.Error(),
 				"completed_at": completedAt,
 			})
 		}
 	} else {
-		r.cfg.Send("command.exit", map[string]any{
+		r.cfg.Send(protocol.CommandExit, map[string]any{
 			"command_id":   r.cfg.CommandID,
 			"exit_code":    0,
 			"completed_at": completedAt,
@@ -178,7 +180,7 @@ func (r *Runner) Kill() {
 
 	log.Printf("[runner] killing command %s", r.cfg.CommandID)
 	syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	r.cfg.Send("command.killed", map[string]any{
+	r.cfg.Send(protocol.CommandKilled, map[string]any{
 		"command_id":   r.cfg.CommandID,
 		"signal":       "KILL",
 		"completed_at": now(),
@@ -198,7 +200,7 @@ func (r *Runner) WriteStdin(data string) {
 		log.Printf("[runner] stdin write error: %v", err)
 		return
 	}
-	r.cfg.Send("command.stdin.accepted", map[string]any{
+	r.cfg.Send(protocol.CommandStdinAccepted, map[string]any{
 		"command_id": r.cfg.CommandID,
 		"bytes":      len(data),
 	})

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/brianmichel/shed/seed/internal/protocol"
 	"github.com/brianmichel/shed/seed/internal/runner"
 	"github.com/brianmichel/shed/seed/internal/transport"
 )
@@ -54,9 +55,9 @@ func (c *Conn) Run() error {
 	log.Printf("[seed] connected to Garden, sandbox_id=%s session_id=%s", c.sandboxID, c.sessionID)
 
 	hostname, _ := os.Hostname()
-	if err := c.send("seed.hello", map[string]any{
+	if err := c.send(protocol.SeedHello, map[string]any{
 		"seed_version":     "0.1.0",
-		"protocol_version": "1",
+		"protocol_version": protocol.Version,
 		"platform":         runtime.GOOS,
 		"arch":             runtime.GOARCH,
 		"hostname":         hostname,
@@ -80,8 +81,12 @@ func (c *Conn) Run() error {
 
 func (c *Conn) handle(msg transport.Message) error {
 	p := msg.Payload
+	if err := protocol.ValidatePayload(msg.Type, p); err != nil {
+		return err
+	}
+
 	switch msg.Type {
-	case "garden.hello":
+	case protocol.GardenHello:
 		if ms, ok := p["heartbeat_interval_ms"].(float64); ok {
 			c.heartbeat = time.Duration(ms) * time.Millisecond
 		}
@@ -89,7 +94,7 @@ func (c *Conn) handle(msg transport.Message) error {
 		go c.heartbeatLoop()
 
 		hostname, _ := os.Hostname()
-		return c.send("seed.register", map[string]any{
+		return c.send(protocol.SeedRegister, map[string]any{
 			"seed_id":        fmt.Sprintf("seed_%s", c.sandboxID),
 			"seed_version":   "0.1.0",
 			"platform":       runtime.GOOS,
@@ -100,10 +105,10 @@ func (c *Conn) handle(msg transport.Message) error {
 			"workspace_root": c.workspaceRoot,
 		})
 
-	case "garden.registered":
+	case protocol.GardenRegistered:
 		log.Printf("[seed] registered")
 		hostname, _ := os.Hostname()
-		return c.send("seed.status", map[string]any{
+		return c.send(protocol.SeedStatus, map[string]any{
 			"state":        "ready",
 			"seed_version": "0.1.0",
 			"platform":     runtime.GOOS,
@@ -111,21 +116,21 @@ func (c *Conn) handle(msg transport.Message) error {
 			"hostname":     hostname,
 		})
 
-	case "garden.heartbeat_ack":
+	case protocol.GardenHeartbeatAck:
 		return nil
 
-	case "garden.lease_warning":
+	case protocol.GardenLeaseWarning:
 		log.Printf("[seed] lease warning: %ds remaining", msToSec(p, "remaining_ms"))
 		return nil
 
-	case "garden.lease_expiring":
+	case protocol.GardenLeaseExpiring:
 		log.Printf("[seed] lease expiring: %ds remaining", msToSec(p, "remaining_ms"))
 		return nil
 
-	case "command.start":
+	case protocol.CommandStart:
 		return c.startCommand(p)
 
-	case "command.cancel":
+	case protocol.CommandCancel:
 		cmdID, _ := p["command_id"].(string)
 		grace := 5000.0
 		if g, ok := p["grace_period_ms"].(float64); ok {
@@ -134,12 +139,12 @@ func (c *Conn) handle(msg transport.Message) error {
 		c.withRunner(cmdID, func(r *runner.Runner) { r.Cancel(time.Duration(grace) * time.Millisecond) })
 		return nil
 
-	case "command.kill":
+	case protocol.CommandKill:
 		cmdID, _ := p["command_id"].(string)
 		c.withRunner(cmdID, func(r *runner.Runner) { r.Kill() })
 		return nil
 
-	case "command.stdin":
+	case protocol.CommandStdin:
 		cmdID, _ := p["command_id"].(string)
 		data, _ := p["data"].(string)
 		c.withRunner(cmdID, func(r *runner.Runner) { r.WriteStdin(data) })
@@ -187,7 +192,7 @@ func (c *Conn) heartbeatLoop() {
 		active := len(c.runners)
 		c.runnersMu.Unlock()
 
-		if err := c.send("seed.heartbeat", map[string]any{
+		if err := c.send(protocol.SeedHeartbeat, map[string]any{
 			"uptime_ms":             time.Since(c.startTime).Milliseconds(),
 			"active_commands":       active,
 			"last_garden_seq_seen":  c.lastGardenSeq.Load(),
@@ -201,9 +206,13 @@ func (c *Conn) heartbeatLoop() {
 }
 
 func (c *Conn) send(msgType string, payload map[string]any) error {
+	if err := protocol.ValidatePayload(msgType, payload); err != nil {
+		return err
+	}
+
 	seq := c.seq.Add(1)
 	return c.t.Send(map[string]any{
-		"version":     "1",
+		"version":     protocol.Version,
 		"seq":         seq,
 		"session_id":  c.sessionID,
 		"sandbox_id":  c.sandboxID,

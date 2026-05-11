@@ -8,44 +8,43 @@ defmodule Garden.SeedProtocol.Capabilities.Commands do
   @impl true
   def name, do: :commands
 
-  # Seed -> Garden messages.
+  @impl true
   def inbound_messages do
     [
-      # Seed accepted command request and queued/started setup.
-      "command.accepted",
-      # Command process started.
-      "command.started",
-      # Stdout output chunk from running command.
-      "command.stdout",
-      # Stderr output chunk from running command.
-      "command.stderr",
-      # Seed confirms stdin bytes were accepted.
-      "command.stdin.accepted",
-      # Command exited normally with exit code.
-      "command.exit",
-      # Command failed during execution/start.
-      "command.failed",
-      # Command finished due to cancellation.
-      "command.cancelled",
-      # Command was force-killed.
-      "command.killed"
-    ]
+          # Seed accepted the command request.
+          "command.accepted",
+          # Command process started.
+          "command.started",
+          # Stdout output chunk from running command.
+          "command.stdout",
+          # Stderr output chunk from running command.
+          "command.stderr",
+          # Seed confirms stdin bytes were accepted.
+          "command.stdin.accepted",
+          # Command exited normally with exit code.
+          "command.exit",
+          # Command failed during start or execution.
+          "command.failed",
+          # Command finished due to cancellation.
+          "command.cancelled",
+          # Command was force-killed.
+          "command.killed"
+        ]
   end
 
-  # Garden -> Seed messages.
+  @impl true
   def outbound_messages do
     [
-      # Garden request to start a command.
-      "command.start",
-      # Garden sends stdin data to command.
-      "command.stdin",
-      # Garden requests graceful cancellation.
-      "command.cancel",
-      # Garden requests immediate termination.
-      "command.kill"
-    ]
+          # Garden requests command start.
+          "command.start",
+          # Garden sends stdin data to the command.
+          "command.stdin",
+          # Garden requests graceful cancellation.
+          "command.cancel",
+          # Garden requests immediate termination.
+          "command.kill"
+        ]
   end
-
   @impl true
   def payload_schemas do
     %{
@@ -64,5 +63,4 @@ defmodule Garden.SeedProtocol.Capabilities.Commands do
       "command.killed" => %{fields: [command_id: :string, signal: :string, completed_at: :string], required: [:command_id, :completed_at]}
     }
   end
-
 end

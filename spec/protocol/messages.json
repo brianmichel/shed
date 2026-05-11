@@ -1,0 +1,380 @@
+{
+  "protocol_version": "1",
+  "capabilities": [
+    {
+      "name": "core",
+      "description": "Core protocol envelopes for acknowledgement and structured errors.",
+      "messages": [
+        {
+          "type": "ack",
+          "direction": "bidirectional",
+          "doc": "Acknowledges receipt or acceptance of a prior message via ack_id.",
+          "payload": {
+            "fields": [
+              {"name": "status", "type": "string", "required": true, "enum": ["accepted", "rejected", "duplicate", "unsupported"]}
+            ]
+          }
+        },
+        {
+          "type": "error",
+          "direction": "bidirectional",
+          "doc": "Structured protocol-level failure envelope.",
+          "payload": {
+            "fields": [
+              {"name": "code", "type": "string", "required": true},
+              {"name": "message", "type": "string", "required": true},
+              {"name": "retryable", "type": "boolean", "required": true},
+              {"name": "details", "type": "map"},
+              {"name": "failed_message_id", "type": "string"}
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "session",
+      "description": "Session lifecycle, handshake, liveness, and runtime status messages.",
+      "messages": [
+        {
+          "type": "seed.hello",
+          "direction": "inbound",
+          "doc": "Seed initiates protocol handshake and identifies runtime.",
+          "payload": {"fields": [
+            {"name": "seed_version", "type": "string", "required": true},
+            {"name": "protocol_version", "type": "string", "required": true},
+            {"name": "platform", "type": "string", "required": true},
+            {"name": "arch", "type": "string", "required": true},
+            {"name": "hostname", "type": "string", "required": true},
+            {"name": "session_key", "type": "string", "required": true}
+          ]}
+        },
+        {
+          "type": "garden.hello",
+          "direction": "outbound",
+          "doc": "Garden handshake response with session timing settings.",
+          "payload": {"fields": [
+            {"name": "protocol_version", "type": "string", "required": true},
+            {"name": "session_id", "type": "string", "required": true},
+            {"name": "sandbox_id", "type": "string", "required": true},
+            {"name": "heartbeat_interval_ms", "type": "integer", "required": true},
+            {"name": "ack_timeout_ms", "type": "integer", "required": true}
+          ]}
+        },
+        {
+          "type": "seed.register",
+          "direction": "inbound",
+          "doc": "Seed registers runtime metadata for the session.",
+          "payload": {"fields": [
+            {"name": "seed_id", "type": "string", "required": true},
+            {"name": "seed_version", "type": "string", "required": true},
+            {"name": "platform", "type": "string", "required": true},
+            {"name": "arch", "type": "string", "required": true},
+            {"name": "hostname", "type": "string", "required": true},
+            {"name": "boot_time", "type": "string"},
+            {"name": "workspace_root", "type": "string"},
+            {"name": "process_id", "type": "integer"}
+          ]}
+        },
+        {
+          "type": "garden.registered",
+          "direction": "outbound",
+          "doc": "Garden confirms registration and active session binding.",
+          "payload": {"fields": [
+            {"name": "session_id", "type": "string", "required": true},
+            {"name": "sandbox_id", "type": "string", "required": true},
+            {"name": "lease_expires_at", "type": "string"},
+            {"name": "max_session_duration_ms", "type": "integer"}
+          ]}
+        },
+        {
+          "type": "seed.resume",
+          "direction": "inbound",
+          "doc": "Seed requests session resume after reconnect.",
+          "payload": {"fields": [
+            {"name": "session_id", "type": "string", "required": true},
+            {"name": "sandbox_id", "type": "string", "required": true},
+            {"name": "last_garden_seq_seen", "type": "integer", "required": true},
+            {"name": "last_seed_seq_sent", "type": "integer", "required": true},
+            {"name": "seed_id", "type": "string", "required": true},
+            {"name": "connection_generation", "type": "integer", "required": true}
+          ]}
+        },
+        {
+          "type": "garden.resume",
+          "direction": "outbound",
+          "doc": "Garden responds with resume outcome and replay hints.",
+          "payload": {"fields": [
+            {"name": "status", "type": "string", "required": true, "enum": ["ok", "replace_session", "rejected"]},
+            {"name": "session_id", "type": "string", "required": true},
+            {"name": "replay_from_seed_seq", "type": "integer"},
+            {"name": "replay_from_garden_seq", "type": "integer"}
+          ]}
+        },
+        {
+          "type": "seed.capabilities",
+          "direction": "inbound",
+          "doc": "Seed advertises feature support and capabilities.",
+          "payload": {"fields": [
+            {"name": "commands", "type": "boolean", "required": true},
+            {"name": "stdin", "type": "boolean", "required": true},
+            {"name": "cancel", "type": "boolean", "required": true},
+            {"name": "kill", "type": "boolean", "required": true},
+            {"name": "files", "type": "map"},
+            {"name": "pty", "type": "boolean", "required": true},
+            {"name": "metrics", "type": "boolean", "required": true},
+            {"name": "ports", "type": "boolean", "required": true},
+            {"name": "snapshots", "type": "boolean", "required": true}
+          ]}
+        },
+        {
+          "type": "seed.status",
+          "direction": "inbound",
+          "doc": "Seed publishes a runtime status snapshot.",
+          "payload": {"fields": [
+            {"name": "state", "type": "string", "required": true, "enum": ["booting", "ready", "degraded", "draining"]},
+            {"name": "hostname", "type": "string"},
+            {"name": "platform", "type": "string"},
+            {"name": "arch", "type": "string"},
+            {"name": "seed_version", "type": "string", "required": true},
+            {"name": "uptime_ms", "type": "integer"},
+            {"name": "workspace_root", "type": "string"},
+            {"name": "active_commands", "type": "integer"},
+            {"name": "network", "type": "map"}
+          ]}
+        },
+        {
+          "type": "seed.heartbeat",
+          "direction": "inbound",
+          "doc": "Seed heartbeat for liveness and sequence watermarks.",
+          "payload": {"fields": [
+            {"name": "uptime_ms", "type": "integer", "required": true},
+            {"name": "active_commands", "type": "integer", "required": true},
+            {"name": "last_garden_seq_seen", "type": "integer", "required": true},
+            {"name": "last_seed_seq_sent", "type": "integer", "required": true},
+            {"name": "load_avg", "type": "float"},
+            {"name": "memory_used_bytes", "type": "integer"},
+            {"name": "connection_generation", "type": "integer", "required": true}
+          ]}
+        },
+        {
+          "type": "garden.heartbeat_ack",
+          "direction": "outbound",
+          "doc": "Garden acknowledges heartbeat and returns lease context.",
+          "payload": {"fields": [
+            {"name": "lease_expires_at", "type": "string"},
+            {"name": "server_time", "type": "string", "required": true},
+            {"name": "status", "type": "string", "required": true, "enum": ["ok", "draining", "reauth_required"]}
+          ]}
+        },
+        {
+          "type": "seed.metrics",
+          "direction": "inbound",
+          "doc": "Seed publishes a resource and network metrics sample.",
+          "payload": {"fields": [
+            {"name": "cpu_percent", "type": "float"},
+            {"name": "load_avg_1m", "type": "float"},
+            {"name": "memory_total_bytes", "type": "integer"},
+            {"name": "memory_used_bytes", "type": "integer"},
+            {"name": "disk_total_bytes", "type": "integer"},
+            {"name": "disk_used_bytes", "type": "integer"},
+            {"name": "fs_available_bytes", "type": "integer"},
+            {"name": "rx_bytes", "type": "integer"},
+            {"name": "tx_bytes", "type": "integer"},
+            {"name": "sampled_at", "type": "string", "required": true}
+          ]}
+        },
+        {
+          "type": "seed.warning",
+          "direction": "inbound",
+          "doc": "Seed emits a non-fatal warning.",
+          "payload": {"fields": [
+            {"name": "code", "type": "string", "required": true},
+            {"name": "message", "type": "string", "required": true},
+            {"name": "details", "type": "map"}
+          ]}
+        },
+        {
+          "type": "seed.activity",
+          "direction": "inbound",
+          "doc": "Seed reports meaningful activity for lease heuristics.",
+          "payload": {"fields": [
+            {"name": "kind", "type": "string", "required": true, "enum": ["command_output", "stdin", "file_op", "session_active"]},
+            {"name": "command_id", "type": "string"},
+            {"name": "at", "type": "string", "required": true}
+          ]}
+        }
+      ]
+    },
+    {
+      "name": "lease",
+      "description": "Lease and expiration signaling between Garden and Seed.",
+      "messages": [
+        {"type": "garden.lease_extended", "direction": "outbound", "doc": "Notifies Seed that the sandbox lease was extended.", "payload": {"fields": [
+          {"name": "lease_expires_at", "type": "string", "required": true},
+          {"name": "reason", "type": "string", "required": true}
+        ]}},
+        {"type": "garden.lease_warning", "direction": "outbound", "doc": "Warns Seed that lease expiry is approaching.", "payload": {"fields": [
+          {"name": "lease_expires_at", "type": "string", "required": true},
+          {"name": "remaining_ms", "type": "integer", "required": true}
+        ]}},
+        {"type": "garden.lease_expiring", "direction": "outbound", "doc": "Signals imminent lease expiry and expected action.", "payload": {"fields": [
+          {"name": "lease_expires_at", "type": "string", "required": true},
+          {"name": "remaining_ms", "type": "integer", "required": true},
+          {"name": "action", "type": "string", "required": true}
+        ]}}
+      ]
+    },
+    {
+      "name": "commands",
+      "description": "Command execution lifecycle and control messages.",
+      "messages": [
+        {"type": "command.start", "direction": "outbound", "doc": "Garden requests command start.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "command", "type": "string", "required": true},
+          {"name": "cwd", "type": "string"},
+          {"name": "env", "type": "map"},
+          {"name": "stdin", "type": "boolean"},
+          {"name": "timeout_ms", "type": "integer"},
+          {"name": "metadata", "type": "map"}
+        ]}},
+        {"type": "command.accepted", "direction": "inbound", "doc": "Seed accepted the command request.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "state", "type": "string", "required": true, "enum": ["queued", "starting"]}
+        ]}},
+        {"type": "command.started", "direction": "inbound", "doc": "Command process started.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "pid", "type": "integer", "required": true},
+          {"name": "started_at", "type": "string", "required": true}
+        ]}},
+        {"type": "command.stdout", "direction": "inbound", "doc": "Stdout output chunk from running command.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "chunk", "type": "string", "required": true},
+          {"name": "encoding", "type": "string", "required": true},
+          {"name": "stream_seq", "type": "integer", "required": true}
+        ]}},
+        {"type": "command.stderr", "direction": "inbound", "doc": "Stderr output chunk from running command.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "chunk", "type": "string", "required": true},
+          {"name": "encoding", "type": "string", "required": true},
+          {"name": "stream_seq", "type": "integer", "required": true}
+        ]}},
+        {"type": "command.stdin", "direction": "outbound", "doc": "Garden sends stdin data to the command.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "data", "type": "string", "required": true},
+          {"name": "encoding", "type": "string", "required": true}
+        ]}},
+        {"type": "command.stdin.accepted", "direction": "inbound", "doc": "Seed confirms stdin bytes were accepted.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "bytes", "type": "integer", "required": true}
+        ]}},
+        {"type": "command.cancel", "direction": "outbound", "doc": "Garden requests graceful cancellation.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "grace_period_ms", "type": "integer", "required": true},
+          {"name": "escalation", "type": "string", "required": true, "enum": ["kill"]}
+        ]}},
+        {"type": "command.kill", "direction": "outbound", "doc": "Garden requests immediate termination.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "signal", "type": "string"}
+        ]}},
+        {"type": "command.exit", "direction": "inbound", "doc": "Command exited normally with exit code.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "exit_code", "type": "integer", "required": true},
+          {"name": "completed_at", "type": "string", "required": true}
+        ]}},
+        {"type": "command.failed", "direction": "inbound", "doc": "Command failed during start or execution.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "exit_code", "type": "integer"},
+          {"name": "message", "type": "string", "required": true},
+          {"name": "completed_at", "type": "string", "required": true}
+        ]}},
+        {"type": "command.cancelled", "direction": "inbound", "doc": "Command finished due to cancellation.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "completed_at", "type": "string", "required": true}
+        ]}},
+        {"type": "command.killed", "direction": "inbound", "doc": "Command was force-killed.", "payload": {"fields": [
+          {"name": "command_id", "type": "string", "required": true},
+          {"name": "signal", "type": "string"},
+          {"name": "completed_at", "type": "string", "required": true}
+        ]}}
+      ]
+    },
+    {
+      "name": "files",
+      "description": "File operation request and response messages.",
+      "messages": [
+        {"type": "file.read", "direction": "outbound", "doc": "Request to read file content."},
+        {"type": "file.write", "direction": "outbound", "doc": "Request to write file content."},
+        {"type": "file.edit", "direction": "outbound", "doc": "Request to apply an edit or patch operation."},
+        {"type": "file.stat", "direction": "outbound", "doc": "Request file metadata or stat information."},
+        {"type": "file.search", "direction": "outbound", "doc": "Request content or path search."},
+        {"type": "file.list", "direction": "outbound", "doc": "Request directory listing."},
+        {"type": "file.delete", "direction": "outbound", "doc": "Request file or directory deletion."},
+        {"type": "file.mkdir", "direction": "outbound", "doc": "Request directory creation."},
+        {"type": "file.result", "direction": "inbound", "doc": "Generic successful file operation response."},
+        {"type": "file.chunk", "direction": "inbound", "doc": "Chunked response payload for large file data."},
+        {"type": "file.error", "direction": "inbound", "doc": "File operation error response."}
+      ]
+    },
+    {
+      "name": "pty",
+      "description": "PTY lifecycle and terminal IO messages.",
+      "messages": [
+        {"type": "pty.create", "direction": "outbound", "doc": "Request creation of a PTY session."},
+        {"type": "pty.input", "direction": "outbound", "doc": "Send input bytes to an active PTY."},
+        {"type": "pty.resize", "direction": "outbound", "doc": "Request terminal resize for an active PTY."},
+        {"type": "pty.close", "direction": "outbound", "doc": "Request closure of an active PTY session."},
+        {"type": "pty.created", "direction": "inbound", "doc": "Confirms PTY session creation."},
+        {"type": "pty.output", "direction": "inbound", "doc": "Streams PTY output chunk."},
+        {"type": "pty.exit", "direction": "inbound", "doc": "Signals PTY process or session exit."},
+        {"type": "pty.error", "direction": "inbound", "doc": "PTY-specific error response."}
+      ]
+    },
+    {
+      "name": "ports",
+      "description": "Service and port exposure control messages.",
+      "messages": [
+        {"type": "port.open", "direction": "outbound", "doc": "Request to expose or open a sandbox port."},
+        {"type": "port.close", "direction": "outbound", "doc": "Request to close a previously exposed port."},
+        {"type": "port.describe", "direction": "outbound", "doc": "Request metadata or status for exposed ports."},
+        {"type": "port.opened", "direction": "inbound", "doc": "Confirms a port was opened or exposed."},
+        {"type": "port.closed", "direction": "inbound", "doc": "Confirms a port was closed."},
+        {"type": "port.status", "direction": "inbound", "doc": "Reports current status of an exposed port."}
+      ]
+    },
+    {
+      "name": "artifacts",
+      "description": "Artifact transfer and snapshot lifecycle messages.",
+      "messages": [
+        {"type": "artifact.upload", "direction": "outbound", "doc": "Request artifact upload flow."},
+        {"type": "artifact.download", "direction": "outbound", "doc": "Request artifact download flow."},
+        {"type": "snapshot.create", "direction": "outbound", "doc": "Request snapshot creation."},
+        {"type": "artifact.ready", "direction": "inbound", "doc": "Signals artifact is ready."},
+        {"type": "artifact.failed", "direction": "inbound", "doc": "Signals artifact processing or transfer failure."},
+        {"type": "snapshot.created", "direction": "inbound", "doc": "Signals snapshot creation succeeded."}
+      ]
+    },
+    {
+      "name": "control",
+      "description": "Session drain and shutdown control messages.",
+      "messages": [
+        {"type": "garden.drain", "direction": "outbound", "doc": "Instructs Seed to stop accepting new work and drain.", "payload": {"fields": [
+          {"name": "reason", "type": "string", "required": true},
+          {"name": "deadline", "type": "string"}
+        ]}},
+        {"type": "seed.draining", "direction": "inbound", "doc": "Seed acknowledgement that it is draining.", "payload": {"fields": [
+          {"name": "active_commands", "type": "integer", "required": true},
+          {"name": "estimated_completion_ms", "type": "integer"}
+        ]}},
+        {"type": "garden.shutdown", "direction": "outbound", "doc": "Instructs Seed to shut down.", "payload": {"fields": [
+          {"name": "reason", "type": "string", "required": true},
+          {"name": "deadline", "type": "string"}
+        ]}},
+        {"type": "seed.goodbye", "direction": "inbound", "doc": "Seed final message before disconnect or exit.", "payload": {"fields": [
+          {"name": "reason", "type": "string", "required": true},
+          {"name": "final_command_count", "type": "integer"},
+          {"name": "sent_at", "type": "string", "required": true}
+        ]}}
+      ]
+    }
+  ]
+}

@@ -50,8 +50,42 @@ This model avoids requiring a direct inbound connection to the container or VM w
 ```text
 .
 ├── garden/   # API and control plane
-└── seed/     # Go daemon running inside each sandbox
+├── seed/     # Go daemon running inside each sandbox
+└── spec/     # Shared protocol and API specifications
 ```
+
+## Spec-driven generation
+
+Garden and Seed now share top-level specs as the source of truth for:
+- WebSocket protocol messages
+- Garden API / OpenAPI output
+
+Specs live in:
+- `spec/protocol/messages.json`
+- `spec/api/openapi.json`
+
+Generated code is produced from those specs for both apps.
+
+### Generate code
+
+```bash
+mise run generate
+```
+
+Or generate only one side:
+
+```bash
+mise run generate:protocol
+mise run generate:api
+```
+
+### Check generated files are up to date
+
+```bash
+mise run check:generated
+```
+
+This should be run in CI and before committing changes to shared specs.
 
 ## Expected configuration
 

@@ -1,6 +1,8 @@
 defmodule Garden.SeedProtocol.Registry do
   @moduledoc """
   Central registry for protocol capability modules.
+
+  This file is generated from `spec/protocol/messages.json`.
   """
 
   alias Garden.SeedProtocol.Capabilities

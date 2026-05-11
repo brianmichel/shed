@@ -8,26 +8,25 @@ defmodule Garden.SeedProtocol.Capabilities.Control do
   @impl true
   def name, do: :control
 
-  # Seed -> Garden messages.
+  @impl true
   def inbound_messages do
     [
-      # Seed acknowledgement that it is draining.
-      "seed.draining",
-      # Seed final message before disconnect/exit.
-      "seed.goodbye"
-    ]
+          # Seed acknowledgement that it is draining.
+          "seed.draining",
+          # Seed final message before disconnect or exit.
+          "seed.goodbye"
+        ]
   end
 
-  # Garden -> Seed messages.
+  @impl true
   def outbound_messages do
     [
-      # Instructs Seed to stop accepting new work and drain.
-      "garden.drain",
-      # Instructs Seed to shut down.
-      "garden.shutdown"
-    ]
+          # Instructs Seed to stop accepting new work and drain.
+          "garden.drain",
+          # Instructs Seed to shut down.
+          "garden.shutdown"
+        ]
   end
-
   @impl true
   def payload_schemas do
     %{
@@ -37,5 +36,4 @@ defmodule Garden.SeedProtocol.Capabilities.Control do
       "seed.goodbye" => %{fields: [reason: :string, final_command_count: :integer, sent_at: :string], required: [:reason, :sent_at]}
     }
   end
-
 end

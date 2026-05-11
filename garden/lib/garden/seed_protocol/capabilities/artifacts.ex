@@ -8,31 +8,31 @@ defmodule Garden.SeedProtocol.Capabilities.Artifacts do
   @impl true
   def name, do: :artifacts
 
-  # Seed -> Garden messages.
+  @impl true
   def inbound_messages do
     [
-      # Signals artifact is ready.
-      "artifact.ready",
-      # Signals artifact processing/transfer failure.
-      "artifact.failed",
-      # Signals snapshot creation succeeded.
-      "snapshot.created"
-    ]
-  end
-
-  # Garden -> Seed messages.
-  def outbound_messages do
-    [
-      # Request artifact upload flow.
-      "artifact.upload",
-      # Request artifact download flow.
-      "artifact.download",
-      # Request snapshot creation.
-      "snapshot.create"
-    ]
+          # Signals artifact is ready.
+          "artifact.ready",
+          # Signals artifact processing or transfer failure.
+          "artifact.failed",
+          # Signals snapshot creation succeeded.
+          "snapshot.created"
+        ]
   end
 
   @impl true
-  def payload_schemas, do: %{}
-
+  def outbound_messages do
+    [
+          # Request artifact upload flow.
+          "artifact.upload",
+          # Request artifact download flow.
+          "artifact.download",
+          # Request snapshot creation.
+          "snapshot.create"
+        ]
+  end
+  @impl true
+  def payload_schemas do
+    %{}
+  end
 end
