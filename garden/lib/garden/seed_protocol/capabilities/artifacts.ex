@@ -3,26 +3,32 @@ defmodule Garden.SeedProtocol.Capabilities.Artifacts do
   Artifact transfer and snapshot lifecycle messages.
   """
 
-  @behaviour Garden.SeedProtocol.Capability
+  use Garden.SeedProtocol.Capability
 
   @impl true
   def name, do: :artifacts
 
-  @impl true
-  def message_types do
+  # Seed -> Garden messages.
+  def inbound_messages do
     [
-      # Request artifact upload flow.
-      "artifact.upload",
-      # Request artifact download flow.
-      "artifact.download",
-      # Request snapshot creation.
-      "snapshot.create",
       # Signals artifact is ready.
       "artifact.ready",
       # Signals artifact processing/transfer failure.
       "artifact.failed",
       # Signals snapshot creation succeeded.
       "snapshot.created"
+    ]
+  end
+
+  # Garden -> Seed messages.
+  def outbound_messages do
+    [
+      # Request artifact upload flow.
+      "artifact.upload",
+      # Request artifact download flow.
+      "artifact.download",
+      # Request snapshot creation.
+      "snapshot.create"
     ]
   end
 

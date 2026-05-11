@@ -3,13 +3,13 @@ defmodule Garden.SeedProtocol.Capabilities.Core do
   Core protocol envelopes for acknowledgement and structured errors.
   """
 
-  @behaviour Garden.SeedProtocol.Capability
+  use Garden.SeedProtocol.Capability
 
   @impl true
   def name, do: :core
 
-  @impl true
-  def message_types do
+  # Messages that can flow in both directions.
+  def bidirectional_messages do
     [
       # Acknowledges receipt/acceptance of a prior message (via ack_id).
       "ack",

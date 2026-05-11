@@ -3,16 +3,14 @@ defmodule Garden.SeedProtocol.Capabilities.Commands do
   Command execution lifecycle and control messages.
   """
 
-  @behaviour Garden.SeedProtocol.Capability
+  use Garden.SeedProtocol.Capability
 
   @impl true
   def name, do: :commands
 
-  @impl true
-  def message_types do
+  # Seed -> Garden messages.
+  def inbound_messages do
     [
-      # Garden request to start a command.
-      "command.start",
       # Seed accepted command request and queued/started setup.
       "command.accepted",
       # Command process started.
@@ -21,14 +19,8 @@ defmodule Garden.SeedProtocol.Capabilities.Commands do
       "command.stdout",
       # Stderr output chunk from running command.
       "command.stderr",
-      # Garden sends stdin data to command.
-      "command.stdin",
       # Seed confirms stdin bytes were accepted.
       "command.stdin.accepted",
-      # Garden requests graceful cancellation.
-      "command.cancel",
-      # Garden requests immediate termination.
-      "command.kill",
       # Command exited normally with exit code.
       "command.exit",
       # Command failed during execution/start.
@@ -37,6 +29,20 @@ defmodule Garden.SeedProtocol.Capabilities.Commands do
       "command.cancelled",
       # Command was force-killed.
       "command.killed"
+    ]
+  end
+
+  # Garden -> Seed messages.
+  def outbound_messages do
+    [
+      # Garden request to start a command.
+      "command.start",
+      # Garden sends stdin data to command.
+      "command.stdin",
+      # Garden requests graceful cancellation.
+      "command.cancel",
+      # Garden requests immediate termination.
+      "command.kill"
     ]
   end
 

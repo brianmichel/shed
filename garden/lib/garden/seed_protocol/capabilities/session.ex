@@ -3,40 +3,46 @@ defmodule Garden.SeedProtocol.Capabilities.Session do
   Session lifecycle, handshake, liveness, and runtime status messages.
   """
 
-  @behaviour Garden.SeedProtocol.Capability
+  use Garden.SeedProtocol.Capability
 
   @impl true
   def name, do: :session
 
-  @impl true
-  def message_types do
+  # Seed -> Garden messages.
+  def inbound_messages do
     [
       # Seed initiates protocol handshake and identifies runtime.
       "seed.hello",
-      # Garden handshake response with session settings.
-      "garden.hello",
       # Seed registers runtime metadata for the session.
       "seed.register",
-      # Garden confirms registration/session binding.
-      "garden.registered",
       # Seed requests resume after reconnect.
       "seed.resume",
-      # Garden responds with resume outcome/replay hints.
-      "garden.resume",
       # Seed advertises feature support/capabilities.
       "seed.capabilities",
       # Seed publishes runtime status snapshot.
       "seed.status",
       # Seed heartbeat for liveness + sequence watermarks.
       "seed.heartbeat",
-      # Garden acknowledges heartbeat and returns lease context.
-      "garden.heartbeat_ack",
       # Seed publishes resource/network metrics sample.
       "seed.metrics",
       # Seed emits a non-fatal warning.
       "seed.warning",
       # Seed reports meaningful activity for lease heuristics.
       "seed.activity"
+    ]
+  end
+
+  # Garden -> Seed messages.
+  def outbound_messages do
+    [
+      # Garden handshake response with session settings.
+      "garden.hello",
+      # Garden confirms registration/session binding.
+      "garden.registered",
+      # Garden responds with resume outcome/replay hints.
+      "garden.resume",
+      # Garden acknowledges heartbeat and returns lease context.
+      "garden.heartbeat_ack"
     ]
   end
 

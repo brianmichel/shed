@@ -3,22 +3,28 @@ defmodule Garden.SeedProtocol.Capabilities.Control do
   Session drain and shutdown control messages.
   """
 
-  @behaviour Garden.SeedProtocol.Capability
+  use Garden.SeedProtocol.Capability
 
   @impl true
   def name, do: :control
 
-  @impl true
-  def message_types do
+  # Seed -> Garden messages.
+  def inbound_messages do
+    [
+      # Seed acknowledgement that it is draining.
+      "seed.draining",
+      # Seed final message before disconnect/exit.
+      "seed.goodbye"
+    ]
+  end
+
+  # Garden -> Seed messages.
+  def outbound_messages do
     [
       # Instructs Seed to stop accepting new work and drain.
       "garden.drain",
-      # Seed acknowledgement that it is draining.
-      "seed.draining",
       # Instructs Seed to shut down.
-      "garden.shutdown",
-      # Seed final message before disconnect/exit.
-      "seed.goodbye"
+      "garden.shutdown"
     ]
   end
 

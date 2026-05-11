@@ -3,13 +3,16 @@ defmodule Garden.SeedProtocol.Capabilities.Lease do
   Lease and expiration signaling between Garden and Seed.
   """
 
-  @behaviour Garden.SeedProtocol.Capability
+  use Garden.SeedProtocol.Capability
 
   @impl true
   def name, do: :lease
 
-  @impl true
-  def message_types do
+  # Seed -> Garden messages.
+  def inbound_messages, do: []
+
+  # Garden -> Seed messages.
+  def outbound_messages do
     [
       # Notifies Seed that the sandbox lease was extended.
       "garden.lease_extended",

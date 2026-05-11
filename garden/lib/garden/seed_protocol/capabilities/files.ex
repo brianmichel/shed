@@ -3,13 +3,25 @@ defmodule Garden.SeedProtocol.Capabilities.Files do
   File operation request/response messages.
   """
 
-  @behaviour Garden.SeedProtocol.Capability
+  use Garden.SeedProtocol.Capability
 
   @impl true
   def name, do: :files
 
-  @impl true
-  def message_types do
+  # Seed -> Garden messages.
+  def inbound_messages do
+    [
+      # Generic successful file operation response.
+      "file.result",
+      # Chunked response payload for large file data.
+      "file.chunk",
+      # File operation error response.
+      "file.error"
+    ]
+  end
+
+  # Garden -> Seed messages.
+  def outbound_messages do
     [
       # Request to read file content.
       "file.read",
@@ -26,13 +38,7 @@ defmodule Garden.SeedProtocol.Capabilities.Files do
       # Request file or directory deletion.
       "file.delete",
       # Request directory creation.
-      "file.mkdir",
-      # Generic successful file operation response.
-      "file.result",
-      # Chunked response payload for large file data.
-      "file.chunk",
-      # File operation error response.
-      "file.error"
+      "file.mkdir"
     ]
   end
 
