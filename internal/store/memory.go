@@ -58,7 +58,7 @@ func (s *MemoryStore) CreateSandbox(_ context.Context, in SandboxCreate) (model.
 	sess := model.ClientSession{SessionID: newID("sess"), SessionKey: newID("seedkey"), SandboxID: id, State: model.SessionIssued, InsertedAt: now, UpdatedAt: now}
 	s.sandboxes[id] = sb
 	s.sessions[sess.SessionID] = sess
-	s.appendEventLocked(id, "", "sandbox.pending_client", map[string]any{"state": string(sb.State)})
+	s.appendEventLocked(id, "", "server.store", "sandbox.pending_client", map[string]any{"state": string(sb.State)})
 	return sb, sess, nil
 }
 
@@ -93,7 +93,7 @@ func (s *MemoryStore) UpdateSandboxState(_ context.Context, sandboxID string, st
 	sb.State = state
 	sb.UpdatedAt = time.Now().UTC()
 	s.sandboxes[sandboxID] = sb
-	s.appendEventLocked(sandboxID, "", "sandbox."+string(state), map[string]any{"state": string(state)})
+	s.appendEventLocked(sandboxID, "", "server.store", "sandbox."+string(state), map[string]any{"state": string(state)})
 	return sb, nil
 }
 
@@ -121,7 +121,7 @@ func (s *MemoryStore) UpdateSandboxAllocation(_ context.Context, sandboxID strin
 	}
 	sb.UpdatedAt = time.Now().UTC()
 	s.sandboxes[sandboxID] = sb
-	s.appendEventLocked(sandboxID, "", "sandbox.allocation.updated", map[string]any{"compute": sb.Compute, "compute_api_version": sb.ComputeAPIVersion, "compute_plugin_version": sb.ComputePluginVersion, "external_allocation_id": sb.ExternalAllocationID})
+	s.appendEventLocked(sandboxID, "", "server.store", "sandbox.allocation.updated", map[string]any{"compute": sb.Compute, "compute_api_version": sb.ComputeAPIVersion, "compute_plugin_version": sb.ComputePluginVersion, "external_allocation_id": sb.ExternalAllocationID})
 	return sb, nil
 }
 
@@ -138,7 +138,7 @@ func (s *MemoryStore) ExtendLease(_ context.Context, sandboxID string, ttl time.
 	sb.Lease = model.Lease{TTLMillis: ttl.Milliseconds(), ExpiresAt: time.Now().UTC().Add(ttl)}
 	sb.UpdatedAt = time.Now().UTC()
 	s.sandboxes[sandboxID] = sb
-	s.appendEventLocked(sandboxID, "", "sandbox.lease.extended", map[string]any{"ttl_ms": sb.Lease.TTLMillis, "expires_at": sb.Lease.ExpiresAt})
+	s.appendEventLocked(sandboxID, "", "server.store", "sandbox.lease.extended", map[string]any{"ttl_ms": sb.Lease.TTLMillis, "expires_at": sb.Lease.ExpiresAt})
 	return sb.Lease, nil
 }
 
@@ -203,7 +203,7 @@ func (s *MemoryStore) CreateCommand(_ context.Context, sandboxID string, in Comm
 		s.commands[sandboxID] = map[string]model.Command{}
 	}
 	s.commands[sandboxID][cmd.ID] = cmd
-	s.appendEventLocked(sandboxID, cmd.ID, "command.queued", map[string]any{"command": cmd.Command})
+	s.appendEventLocked(sandboxID, cmd.ID, "server.store", "command.queued", map[string]any{"command": cmd.Command})
 	return cmd, nil
 }
 
@@ -242,13 +242,13 @@ func (s *MemoryStore) UpdateCommand(_ context.Context, cmd model.Command) (model
 	return cmd, nil
 }
 
-func (s *MemoryStore) AppendEvent(_ context.Context, sandboxID, commandID, eventType string, data map[string]any) (model.Event, error) {
+func (s *MemoryStore) AppendEvent(_ context.Context, sandboxID, commandID, source, eventType string, data map[string]any) (model.Event, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.sandboxes[sandboxID]; !ok {
 		return model.Event{}, ErrSandboxNotFound
 	}
-	return s.appendEventLocked(sandboxID, commandID, eventType, data), nil
+	return s.appendEventLocked(sandboxID, commandID, source, eventType, data), nil
 }
 
 func (s *MemoryStore) ListSandboxEvents(_ context.Context, sandboxID string, after int64) ([]model.Event, int64, error) {
@@ -279,9 +279,9 @@ func (s *MemoryStore) RememberIdempotencyKey(_ context.Context, key, value strin
 	return value, true, nil
 }
 
-func (s *MemoryStore) appendEventLocked(sandboxID, commandID, eventType string, data map[string]any) model.Event {
+func (s *MemoryStore) appendEventLocked(sandboxID, commandID, source, eventType string, data map[string]any) model.Event {
 	s.nextSeq[sandboxID]++
-	ev := model.Event{ID: newID("evt"), SandboxID: sandboxID, CommandID: commandID, Seq: s.nextSeq[sandboxID], Type: eventType, Timestamp: time.Now().UTC(), Data: data}
+	ev := model.Event{ID: newID("evt"), SandboxID: sandboxID, CommandID: commandID, Seq: s.nextSeq[sandboxID], Type: eventType, Source: source, Timestamp: time.Now().UTC(), Data: data}
 	s.events[sandboxID] = append(s.events[sandboxID], ev)
 	return ev
 }

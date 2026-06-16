@@ -97,6 +97,7 @@ type Event struct {
 	CommandID string         `json:"command_id,omitempty"`
 	Seq       int64          `json:"seq"`
 	Type      string         `json:"type"`
+	Source    string         `json:"source,omitempty"`
 	Timestamp time.Time      `json:"timestamp"`
 	Data      map[string]any `json:"data,omitempty"`
 }

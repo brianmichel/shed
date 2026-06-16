@@ -384,7 +384,7 @@ async function refreshEvents() {
     tbody.innerHTML = list.map((e) => `
       <tr>
         <td class="col-seq mono">${e.seq ?? "—"}</td>
-        <td class="col-ts mono">${fmtTimestamp(e.occurred_at || e.time || e.inserted_at)}</td>
+        <td class="col-ts mono">${fmtTimestamp(e.timestamp || e.occurred_at || e.time || e.inserted_at)}</td>
         <td>${escapeHTML(e.type || "—")}</td>
         <td><span class="meta">${escapeHTML(e.source || "—")}</span></td>
         <td><span class="mono" style="color:var(--color-text-muted)">${escapeHTML(JSON.stringify(e.data || {}))}</span></td>

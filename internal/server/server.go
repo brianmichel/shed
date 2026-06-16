@@ -64,7 +64,7 @@ func New(cfg Config, st store.Store) *Server {
 	}
 	s := &Server{cfg: cfg, store: st, mux: http.NewServeMux(), clients: map[string]*clientConn{}, allocMgr: allocMgr, upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}}
 	allocMgr.SetEventSink(func(ctx context.Context, sandboxID, eventType string, data map[string]any) {
-		_, _ = s.store.AppendEvent(ctx, sandboxID, "", eventType, data)
+		_, _ = s.store.AppendEvent(ctx, sandboxID, "", "server.compute", eventType, data)
 	})
 	s.routes()
 	return s
@@ -141,7 +141,7 @@ func (s *Server) leaseSweeper(ctx context.Context) {
 					continue
 				}
 				if !sb.Lease.ExpiresAt.IsZero() && now.After(sb.Lease.ExpiresAt) {
-					_, _ = s.store.AppendEvent(ctx, sb.ID, "", "sandbox.lease.expired", map[string]any{"expires_at": sb.Lease.ExpiresAt})
+					_, _ = s.store.AppendEvent(ctx, sb.ID, "", "server.lease", "sandbox.lease.expired", map[string]any{"expires_at": sb.Lease.ExpiresAt})
 					_, _ = s.allocMgr.Release(ctx, sb.Compute, compute.ReleaseRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, Config: sb.ComputeConfig, Reason: "lease_expired"})
 					s.closeClientForSandbox(sb.ID)
 					_, _ = s.store.UpdateSandboxState(ctx, sb.ID, model.SandboxReleased)
@@ -339,7 +339,7 @@ func (s *Server) fileRequest(w http.ResponseWriter, r *http.Request, msgType str
 		api.WriteError(w, 422, "file_request_failed", message, false)
 		return
 	}
-	_, _ = s.store.AppendEvent(r.Context(), r.PathValue("sandbox_id"), "", eventType, response.Payload)
+	_, _ = s.store.AppendEvent(r.Context(), r.PathValue("sandbox_id"), "", "server.api", eventType, response.Payload)
 	api.WriteJSON(w, 200, map[string]any{"data": response.Payload})
 }
 
@@ -385,11 +385,11 @@ func (s *Server) execViaCompute(ctx context.Context, sb model.Sandbox, cmd model
 		if ev.CommandID == "" {
 			ev.CommandID = cmd.ID
 		}
-		s.handleCommandEventPayload(ctx, sb.ID, ev.CommandID, ev.Type, ev.Data)
+		s.handleCommandEventPayload(ctx, sb.ID, ev.CommandID, "compute.driver", ev.Type, ev.Data)
 		return nil
 	})
 	if err != nil {
-		s.handleCommandEventPayload(ctx, sb.ID, cmd.ID, "command.failed", map[string]any{"command_id": cmd.ID, "message": err.Error(), "completed_at": time.Now().UTC().Format(time.RFC3339)})
+		s.handleCommandEventPayload(ctx, sb.ID, cmd.ID, "server.compute", "command.failed", map[string]any{"command_id": cmd.ID, "message": err.Error(), "completed_at": time.Now().UTC().Format(time.RFC3339)})
 	}
 }
 
@@ -495,7 +495,7 @@ func (s *Server) clientConnect(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 	sess.State = model.SessionConnected
 	_, _ = s.store.UpdateSession(context.Background(), sess)
-	_, _ = s.store.AppendEvent(context.Background(), sandboxID, "", "client.connected", map[string]any{"session_id": sess.SessionID})
+	_, _ = s.store.AppendEvent(context.Background(), sandboxID, "", "server.api", "client.connected", map[string]any{"session_id": sess.SessionID})
 	go s.readClient(cc)
 }
 
@@ -578,10 +578,10 @@ func (s *Server) updateCommandFromPayload(ctx context.Context, msg protocol.Mess
 	if cmdID == "" {
 		return
 	}
-	s.handleCommandEventPayload(ctx, msg.SandboxID, cmdID, eventType, msg.Payload)
+	s.handleCommandEventPayload(ctx, msg.SandboxID, cmdID, "client.protocol", eventType, msg.Payload)
 }
 
-func (s *Server) handleCommandEventPayload(ctx context.Context, sandboxID, cmdID, eventType string, payload map[string]any) {
+func (s *Server) handleCommandEventPayload(ctx context.Context, sandboxID, cmdID, source, eventType string, payload map[string]any) {
 	if payload == nil {
 		payload = map[string]any{}
 	}
@@ -618,7 +618,7 @@ func (s *Server) handleCommandEventPayload(ctx context.Context, sandboxID, cmdID
 		}
 		_, _ = s.store.UpdateCommand(ctx, cmd)
 	}
-	_, _ = s.store.AppendEvent(ctx, sandboxID, cmdID, eventType, payload)
+	_, _ = s.store.AppendEvent(ctx, sandboxID, cmdID, source, eventType, payload)
 }
 
 func (cc *clientConn) send(typ string, payload map[string]any) error {

@@ -52,7 +52,7 @@ type Store interface {
 	GetCommand(ctx context.Context, sandboxID, commandID string) (model.Command, error)
 	UpdateCommand(ctx context.Context, command model.Command) (model.Command, error)
 
-	AppendEvent(ctx context.Context, sandboxID, commandID, eventType string, data map[string]any) (model.Event, error)
+	AppendEvent(ctx context.Context, sandboxID, commandID, source, eventType string, data map[string]any) (model.Event, error)
 	ListSandboxEvents(ctx context.Context, sandboxID string, after int64) ([]model.Event, int64, error)
 	ListCommandEvents(ctx context.Context, sandboxID, commandID string, after int64) ([]model.Event, int64, error)
 
