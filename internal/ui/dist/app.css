@@ -749,6 +749,12 @@ a { color: inherit; text-decoration: none; }
 .id   { font-family: var(--font-mono); font-size: var(--fs-mono-md); color: var(--color-text); }
 .meta { font-family: var(--font-mono); font-size: var(--fs-mono-sm); color: var(--color-text-2); }
 
+.hint {
+  cursor: help;
+  border-bottom: 1px dashed var(--color-text-muted);
+}
+.tbl tbody tr:hover .hint { border-bottom-color: var(--color-text-2); }
+
 /* ============================================================
    PILLS / CAPS
    ============================================================ */
