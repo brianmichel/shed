@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Shed</title>
   <link rel="stylesheet" href="/ui/app.css" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("shed.theme");
+        if (t === "dark" || t === "light") document.documentElement.setAttribute("data-theme", t);
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <header class="topbar">
@@ -15,9 +23,6 @@
       </a>
       <nav class="topnav" aria-label="Primary">
         <a href="#/sandboxes" data-route="sandboxes">Sandboxes</a>
-        <a href="#/run" data-route="run">Run</a>
-        <a href="#/files" data-route="files">Files</a>
-        <a href="#/events" data-route="events">Events</a>
       </nav>
       <div class="topmeta">
         <span class="kv"><span class="k">api</span><span class="v mono">/v1</span></span>
@@ -25,125 +30,101 @@
           <span class="dot" aria-hidden="true"></span>
           <span class="v" id="health-text">connecting</span>
         </span>
+        <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle theme" title="Theme: auto">
+          <span class="theme-icon" id="theme-icon">A</span>
+        </button>
       </div>
     </div>
   </header>
 
   <section class="subbar">
-    <div class="subbar-inner">
-      <div class="crumbs" id="crumbs">
-        <span class="crumb">sandboxes</span>
-      </div>
-      <div class="stats" id="stats">
-        <span class="stat"><span class="stat-k">total</span><span class="stat-v mono" id="stat-total">0</span></span>
-        <span class="stat"><span class="stat-k">ready</span><span class="stat-v mono" id="stat-ready">0</span></span>
-        <span class="stat"><span class="stat-k">pending</span><span class="stat-v mono" id="stat-pending">0</span></span>
-        <span class="stat"><span class="stat-k">released</span><span class="stat-v mono" id="stat-released">0</span></span>
-      </div>
+    <div class="subbar-inner" id="subbar-inner">
+      <!-- rendered by router -->
     </div>
   </section>
 
   <main class="wrap">
-    <section class="panel" id="panel-sandboxes">
-      <header class="panel-head">
-        <h2>Sandboxes</h2>
-        <div class="actions">
-          <button class="btn ghost" id="refresh">Refresh</button>
-          <button class="btn primary" id="create">+ New sandbox</button>
+    <!-- LIST VIEW -->
+    <section class="view" id="view-list" hidden>
+      <div class="panel">
+        <div class="tbl-wrap" id="sandbox-tbl-wrap">
+          <table class="tbl" id="sandbox-tbl">
+            <thead>
+              <tr>
+                <th class="col-id">ID</th>
+                <th>State</th>
+                <th>Environment</th>
+                <th>Template</th>
+                <th>Capabilities</th>
+                <th>Lease</th>
+                <th class="col-age">Age</th>
+                <th class="col-chev" aria-hidden="true"></th>
+              </tr>
+            </thead>
+            <tbody id="sandboxes"></tbody>
+          </table>
         </div>
-      </header>
-      <div class="tbl-wrap">
-        <table class="tbl" id="sandbox-tbl">
-          <thead>
-            <tr>
-              <th class="col-id">ID</th>
-              <th>State</th>
-              <th>Environment</th>
-              <th>Template</th>
-              <th>Capabilities</th>
-              <th>Lease</th>
-              <th class="col-age">Age</th>
-              <th class="col-act">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="sandboxes">
-            <tr class="empty"><td colspan="8">Loading sandboxes…</td></tr>
-          </tbody>
-        </table>
+        <div id="sandbox-empty" class="empty-state" hidden>
+          <div class="empty-title">No sandboxes</div>
+          <div class="empty-body">Create one to run commands, browse files, and stream events.</div>
+          <button class="btn primary" id="create-empty">+ New sandbox</button>
+        </div>
       </div>
     </section>
 
-    <section class="panel" id="panel-run">
-      <header class="panel-head">
-        <h2>Run command</h2>
-        <div class="sel" id="sel-summary">no sandbox selected</div>
-      </header>
-      <div class="runbar">
-        <label class="field">
-          <span class="label">Sandbox</span>
-          <input id="sandbox-id" class="mono" placeholder="sbx_…" autocomplete="off" />
-        </label>
-        <label class="field grow">
-          <span class="label">Command</span>
-          <input id="command" class="mono" value="echo hello from shed" autocomplete="off" />
-        </label>
-        <button class="btn primary" id="run">Execute</button>
-      </div>
-      <div class="terminal" id="term">
-        <div class="term-head">
-          <span class="t-dot t-r"></span><span class="t-dot t-y"></span><span class="t-dot t-g"></span>
-          <span class="term-title mono" id="term-title">no command</span>
-          <span class="term-status mono" id="term-status">idle</span>
-        </div>
-        <pre id="output" class="term-body">Select a sandbox and run a command. Events stream here.</pre>
-      </div>
-    </section>
+    <!-- DETAIL VIEW -->
+    <section class="view" id="view-detail" hidden>
+      <!-- OVERVIEW TAB -->
+      <section class="panel" data-tab="overview" hidden>
+        <div class="kv-grid" id="overview-kv"></div>
+      </section>
 
-    <section class="panel" id="panel-files">
-      <header class="panel-head">
-        <h2>Files</h2>
-        <div class="actions">
-          <button class="btn ghost" id="refresh-files">Refresh files</button>
-          <button class="btn primary" id="save-file">Save file</button>
-        </div>
-      </header>
-      <div class="file-layout">
-        <div class="file-browser">
-          <div class="file-toolbar">
-            <label class="field grow">
-              <span class="label">Directory</span>
-              <input id="files-path" class="mono" value="/workspace" autocomplete="off" />
-            </label>
-            <button class="btn" id="load-files">Load</button>
-          </div>
-          <div id="files-list" class="files-list">Select a sandbox and load files.</div>
-        </div>
-        <div class="file-editor">
-          <label class="field">
-            <span class="label">File path</span>
-            <input id="file-path" class="mono" placeholder="/workspace/hello.txt" autocomplete="off" />
+      <!-- RUN TAB -->
+      <section class="panel" data-tab="run" hidden>
+        <div class="runbar">
+          <label class="field grow">
+            <span class="label">Command</span>
+            <input id="command" class="mono" value="echo hello from shed" autocomplete="off" />
           </label>
-          <textarea id="file-content" class="file-content" spellcheck="false" placeholder="Open or create a file…"></textarea>
+          <button class="btn primary" id="run">Execute</button>
         </div>
-      </div>
-    </section>
+        <div class="terminal" id="term">
+          <div class="term-head">
+            <span class="t-dot t-r"></span><span class="t-dot t-y"></span><span class="t-dot t-g"></span>
+            <span class="term-title mono" id="term-title">no command</span>
+            <span class="term-status mono" id="term-status">idle</span>
+          </div>
+          <pre id="output" class="term-body">Run a command and events stream here.</pre>
+        </div>
+      </section>
 
-    <section class="panel" id="panel-events">
-      <header class="panel-head">
-        <h2>Events</h2>
-        <div class="actions">
-          <button class="btn ghost" id="refresh-events">Refresh events</button>
-          <button class="btn ghost" id="copy-events">Copy JSON</button>
+      <!-- FILES TAB -->
+      <section class="panel" data-tab="files" hidden>
+        <div class="empty-state">
+          <div class="empty-title">Files coming soon</div>
+          <div class="empty-body">Browse, view, and edit files inside this sandbox's workspace from here.</div>
         </div>
-      </header>
-      <div class="event-toolbar">
-        <label class="field grow">
-          <span class="label">Sandbox</span>
-          <input id="events-sandbox-id" class="mono" placeholder="select a sandbox" autocomplete="off" />
-        </label>
-        <button class="btn" id="load-events">Load events</button>
-      </div>
-      <pre id="events-output" class="events-body">Select a sandbox to inspect its event stream.</pre>
+      </section>
+
+      <!-- EVENTS TAB -->
+      <section class="panel" data-tab="events" hidden>
+        <div class="tbl-wrap">
+          <table class="tbl tbl-compact" id="events-tbl">
+            <thead>
+              <tr>
+                <th class="col-seq">Seq</th>
+                <th class="col-ts">Timestamp</th>
+                <th>Type</th>
+                <th>Source</th>
+                <th>Payload</th>
+              </tr>
+            </thead>
+            <tbody id="events-body">
+              <tr class="empty"><td colspan="5">No events yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </section>
   </main>
 
