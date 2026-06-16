@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/url"
 	"os"
@@ -34,11 +35,12 @@ type Client struct {
 	lastSeen atomic.Int64
 	runners  map[string]*Runner
 	mu       sync.Mutex
+	writeMu  sync.Mutex
 }
 
 func New(cfg Config) (*Client, error) {
 	if cfg.ServerURL == "" {
-		cfg.ServerURL = "ws://127.0.0.1:8080/v1/client/connect"
+		cfg.ServerURL = "ws://127.0.0.1:6464/v1/client/connect"
 	}
 	if cfg.WorkspaceRoot == "" {
 		cfg.WorkspaceRoot = os.TempDir()
@@ -110,6 +112,12 @@ func (c *Client) handle(msg protocol.Message) error {
 	case "command.kill":
 		c.withRunner(stringValue(msg.Payload, "command_id"), func(r *Runner) { r.Kill() })
 		return nil
+	case "file.list":
+		return c.handleFileList(msg)
+	case "file.read":
+		return c.handleFileRead(msg)
+	case "file.write":
+		return c.handleFileWrite(msg)
 	default:
 		return nil
 	}
@@ -151,6 +159,17 @@ func (c *Client) heartbeat(ctx context.Context) {
 
 func (c *Client) send(msgType string, payload map[string]any) error {
 	m := protocol.New(msgType, c.cfg.SessionID, c.cfg.SandboxID, c.seq.Add(1), payload)
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+	return c.ws.WriteJSON(m)
+}
+
+func (c *Client) reply(to protocol.Message, msgType string, payload map[string]any) error {
+	m := protocol.New(msgType, c.cfg.SessionID, c.cfg.SandboxID, c.seq.Add(1), payload)
+	m.ReplyTo = to.MessageID
+	m.RequestID = to.RequestID
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	return c.ws.WriteJSON(m)
 }
 
@@ -164,17 +183,21 @@ func (c *Client) withRunner(id string, fn func(*Runner)) {
 }
 
 func (c *Client) resolveCwd(cwd string) (string, error) {
+	return c.resolveWorkspacePath(cwd)
+}
+
+func (c *Client) resolveWorkspacePath(p string) (string, error) {
 	root, err := filepath.Abs(c.cfg.WorkspaceRoot)
 	if err != nil {
 		return "", err
 	}
 	var target string
-	if cwd == "" || cwd == "/workspace" {
+	if p == "" || p == "/workspace" {
 		target = root
-	} else if rest, ok := strings.CutPrefix(cwd, "/workspace/"); ok {
+	} else if rest, ok := strings.CutPrefix(p, "/workspace/"); ok {
 		target = filepath.Join(root, rest)
 	} else {
-		return "", fmt.Errorf("cwd must be under /workspace")
+		return "", fmt.Errorf("path must be under /workspace")
 	}
 	target, err = filepath.Abs(target)
 	if err != nil {
@@ -182,9 +205,95 @@ func (c *Client) resolveCwd(cwd string) (string, error) {
 	}
 	rel, err := filepath.Rel(root, target)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
-		return "", fmt.Errorf("cwd escapes workspace")
+		return "", fmt.Errorf("path escapes workspace")
 	}
 	return target, nil
+}
+
+func (c *Client) virtualPath(realPath string) string {
+	root, err := filepath.Abs(c.cfg.WorkspaceRoot)
+	if err != nil {
+		return "/workspace"
+	}
+	rel, err := filepath.Rel(root, realPath)
+	if err != nil || rel == "." {
+		return "/workspace"
+	}
+	return "/workspace/" + filepath.ToSlash(rel)
+}
+
+func (c *Client) handleFileList(msg protocol.Message) error {
+	path := stringValueDefault(msg.Payload, "path", "/workspace")
+	realPath, err := c.resolveWorkspacePath(path)
+	if err != nil {
+		return c.reply(msg, "file.error", map[string]any{"message": err.Error(), "path": path})
+	}
+	entries, err := os.ReadDir(realPath)
+	if err != nil {
+		return c.reply(msg, "file.error", map[string]any{"message": err.Error(), "path": path})
+	}
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		kind := "file"
+		if entry.IsDir() {
+			kind = "dir"
+		}
+		out = append(out, map[string]any{
+			"name":        entry.Name(),
+			"path":        c.virtualPath(filepath.Join(realPath, entry.Name())),
+			"type":        kind,
+			"size":        info.Size(),
+			"mode":        info.Mode().String(),
+			"modified_at": info.ModTime().UTC().Format(time.RFC3339),
+		})
+	}
+	return c.reply(msg, "file.list.result", map[string]any{"path": path, "entries": out})
+}
+
+func (c *Client) handleFileRead(msg protocol.Message) error {
+	path := stringValue(msg.Payload, "path")
+	if path == "" {
+		return c.reply(msg, "file.error", map[string]any{"message": "path is required"})
+	}
+	realPath, err := c.resolveWorkspacePath(path)
+	if err != nil {
+		return c.reply(msg, "file.error", map[string]any{"message": err.Error(), "path": path})
+	}
+	info, err := os.Stat(realPath)
+	if err != nil {
+		return c.reply(msg, "file.error", map[string]any{"message": err.Error(), "path": path})
+	}
+	if info.IsDir() {
+		return c.reply(msg, "file.error", map[string]any{"message": "path is a directory", "path": path})
+	}
+	content, err := os.ReadFile(realPath)
+	if err != nil {
+		return c.reply(msg, "file.error", map[string]any{"message": err.Error(), "path": path})
+	}
+	return c.reply(msg, "file.read.result", map[string]any{"path": path, "content": string(content), "bytes": len(content), "mode": info.Mode().String(), "modified_at": info.ModTime().UTC().Format(time.RFC3339)})
+}
+
+func (c *Client) handleFileWrite(msg protocol.Message) error {
+	path := stringValue(msg.Payload, "path")
+	content := stringValue(msg.Payload, "content")
+	if path == "" {
+		return c.reply(msg, "file.error", map[string]any{"message": "path is required"})
+	}
+	realPath, err := c.resolveWorkspacePath(path)
+	if err != nil {
+		return c.reply(msg, "file.error", map[string]any{"message": err.Error(), "path": path})
+	}
+	if err := os.MkdirAll(filepath.Dir(realPath), 0o755); err != nil {
+		return c.reply(msg, "file.error", map[string]any{"message": err.Error(), "path": path})
+	}
+	if err := os.WriteFile(realPath, []byte(content), fs.FileMode(0o644)); err != nil {
+		return c.reply(msg, "file.error", map[string]any{"message": err.Error(), "path": path})
+	}
+	return c.reply(msg, "file.write.result", map[string]any{"path": path, "bytes": len(content)})
 }
 
 func normalizeWSURL(raw string) (*url.URL, error) {

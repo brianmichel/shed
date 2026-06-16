@@ -44,6 +44,7 @@ type clientConn struct {
 	seq     atomic.Int64
 	sent    map[string]protocol.Message
 	seen    map[string]bool
+	pending map[string]chan protocol.Message
 	mu      sync.Mutex
 }
 
@@ -126,6 +127,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/sandboxes/{sandbox_id}/release", s.releaseSandbox)
 	s.mux.HandleFunc("POST /v1/sandboxes/{sandbox_id}/lease", s.extendLease)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}/events", s.sandboxEvents)
+	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}/files", s.listFiles)
+	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}/files/content", s.readFile)
+	s.mux.HandleFunc("PUT /v1/sandboxes/{sandbox_id}/files/content", s.writeFile)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}/commands", s.listCommands)
 	s.mux.HandleFunc("POST /v1/sandboxes/{sandbox_id}/commands", s.createCommand)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}/commands/{command_id}", s.getCommand)
@@ -215,6 +219,65 @@ func (s *Server) sandboxEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeEvents(w, r, events, next)
+}
+
+func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = "/workspace"
+	}
+	s.fileRequest(w, r, "file.list", map[string]any{"path": path}, "file.listed")
+}
+
+func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		api.WriteError(w, 422, "invalid_request", "path is required", false)
+		return
+	}
+	s.fileRequest(w, r, "file.read", map[string]any{"path": path}, "file.read")
+}
+
+func (s *Server) writeFile(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Path    string `json:"path"`
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Path == "" {
+		api.WriteError(w, 422, "invalid_request", "path and content are required", false)
+		return
+	}
+	s.fileRequest(w, r, "file.write", map[string]any{"path": in.Path, "content": in.Content}, "file.written")
+}
+
+func (s *Server) fileRequest(w http.ResponseWriter, r *http.Request, msgType string, payload map[string]any, eventType string) {
+	sess, err := s.store.FindSessionBySandbox(r.Context(), r.PathValue("sandbox_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	cc := s.getClient(sess.SessionID)
+	if cc == nil {
+		api.WriteError(w, 409, "client_not_connected", "Client is not connected", true)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	response, err := cc.request(ctx, msgType, payload)
+	if err != nil {
+		api.WriteError(w, 502, "file_request_failed", err.Error(), true)
+		return
+	}
+	if response.Type == "file.error" {
+		message, _ := response.Payload["message"].(string)
+		if message == "" {
+			message = "File request failed"
+		}
+		api.WriteError(w, 422, "file_request_failed", message, false)
+		return
+	}
+	_, _ = s.store.AppendEvent(r.Context(), r.PathValue("sandbox_id"), "", eventType, response.Payload)
+	api.WriteJSON(w, 200, map[string]any{"data": response.Payload})
 }
 
 func (s *Server) createCommand(w http.ResponseWriter, r *http.Request) {
@@ -319,7 +382,7 @@ func (s *Server) clientConnect(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	cc := &clientConn{session: sess, ws: ws, sent: map[string]protocol.Message{}, seen: map[string]bool{}}
+	cc := &clientConn{session: sess, ws: ws, sent: map[string]protocol.Message{}, seen: map[string]bool{}, pending: map[string]chan protocol.Message{}}
 	s.mu.Lock()
 	s.clients[sess.SessionID] = cc
 	s.mu.Unlock()
@@ -358,6 +421,16 @@ func (s *Server) readClient(cc *clientConn) {
 			continue
 		}
 		cc.seen[msg.MessageID] = true
+		if msg.ReplyTo != "" {
+			if ch := cc.pending[msg.ReplyTo]; ch != nil {
+				cc.mu.Unlock()
+				select {
+				case ch <- msg:
+				default:
+				}
+				continue
+			}
+		}
 		cc.mu.Unlock()
 		s.handleClientMessage(cc, msg)
 	}
@@ -441,6 +514,32 @@ func (cc *clientConn) sendMessage(msg protocol.Message) error {
 	defer cc.mu.Unlock()
 	cc.sent[msg.MessageID] = msg
 	return cc.ws.WriteJSON(msg)
+}
+func (cc *clientConn) request(ctx context.Context, typ string, payload map[string]any) (protocol.Message, error) {
+	msg := protocol.New(typ, cc.session.SessionID, cc.session.SandboxID, cc.seq.Add(1), payload)
+	ch := make(chan protocol.Message, 1)
+	cc.mu.Lock()
+	cc.pending[msg.MessageID] = ch
+	cc.sent[msg.MessageID] = msg
+	err := cc.ws.WriteJSON(msg)
+	cc.mu.Unlock()
+	if err != nil {
+		cc.mu.Lock()
+		delete(cc.pending, msg.MessageID)
+		cc.mu.Unlock()
+		return protocol.Message{}, err
+	}
+	defer func() {
+		cc.mu.Lock()
+		delete(cc.pending, msg.MessageID)
+		cc.mu.Unlock()
+	}()
+	select {
+	case response := <-ch:
+		return response, nil
+	case <-ctx.Done():
+		return protocol.Message{}, ctx.Err()
+	}
 }
 func (s *Server) getClient(sessionID string) *clientConn {
 	s.mu.Lock()

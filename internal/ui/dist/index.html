@@ -16,6 +16,7 @@
       <nav class="topnav" aria-label="Primary">
         <a href="#/sandboxes" data-route="sandboxes">Sandboxes</a>
         <a href="#/run" data-route="run">Run</a>
+        <a href="#/files" data-route="files">Files</a>
         <a href="#/events" data-route="events">Events</a>
       </nav>
       <div class="topmeta">
@@ -95,6 +96,35 @@
           <span class="term-status mono" id="term-status">idle</span>
         </div>
         <pre id="output" class="term-body">Select a sandbox and run a command. Events stream here.</pre>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-files">
+      <header class="panel-head">
+        <h2>Files</h2>
+        <div class="actions">
+          <button class="btn ghost" id="refresh-files">Refresh files</button>
+          <button class="btn primary" id="save-file">Save file</button>
+        </div>
+      </header>
+      <div class="file-layout">
+        <div class="file-browser">
+          <div class="file-toolbar">
+            <label class="field grow">
+              <span class="label">Directory</span>
+              <input id="files-path" class="mono" value="/workspace" autocomplete="off" />
+            </label>
+            <button class="btn" id="load-files">Load</button>
+          </div>
+          <div id="files-list" class="files-list">Select a sandbox and load files.</div>
+        </div>
+        <div class="file-editor">
+          <label class="field">
+            <span class="label">File path</span>
+            <input id="file-path" class="mono" placeholder="/workspace/hello.txt" autocomplete="off" />
+          </label>
+          <textarea id="file-content" class="file-content" spellcheck="false" placeholder="Open or create a file…"></textarea>
+        </div>
       </div>
     </section>
 

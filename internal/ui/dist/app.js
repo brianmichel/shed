@@ -97,6 +97,7 @@ function renderSandboxes() {
           <span class="row-actions">
             <button class="btn tiny" data-act="select">Select</button>
             <button class="btn tiny" data-act="run">Run</button>
+            <button class="btn tiny" data-act="files">Files</button>
             <button class="btn tiny" data-act="events">Events</button>
             <button class="btn tiny" data-act="extend">+30m</button>
             <button class="btn tiny danger" data-act="release">Release</button>
@@ -125,6 +126,11 @@ async function handleSandboxAction(id, action, button) {
   if (action === "select") return selectSandbox(id);
   if (action === "run") {
     selectSandbox(id, { route: "run" });
+    return;
+  }
+  if (action === "files") {
+    selectSandbox(id, { route: "files" });
+    await loadFiles();
     return;
   }
   if (action === "events") {
@@ -349,6 +355,82 @@ async function copyEvents() {
   setTimeout(() => (btn.textContent = old), 1000);
 }
 
+async function loadFiles() {
+  const sid = state.selectedId || $("sandbox-id").value.trim();
+  const dir = $("files-path").value.trim() || "/workspace";
+  if (!sid) {
+    $("files-list").textContent = "Select a sandbox first.";
+    return;
+  }
+  try {
+    const r = await json(`/v1/sandboxes/${sid}/files?path=${encodeURIComponent(dir)}`);
+    const entries = r.data.entries || [];
+    $("files-list").innerHTML = entries.length
+      ? entries.map(fileRow).join("")
+      : `<div class="file-row"><span class="file-name">Empty directory</span></div>`;
+    $("files-list").querySelectorAll(".file-row[data-path]").forEach((row) => {
+      row.addEventListener("click", async () => {
+        if (row.dataset.type === "dir") {
+          $("files-path").value = row.dataset.path;
+          await loadFiles();
+        } else {
+          await openFile(row.dataset.path);
+        }
+      });
+    });
+  } catch (e) {
+    $("files-list").textContent = `[file list failed] ${e.message}`;
+  }
+}
+
+function fileRow(entry) {
+  const icon = entry.type === "dir" ? "▸" : "•";
+  return `<div class="file-row" data-path="${entry.path}" data-type="${entry.type}"><span>${icon}</span><span class="file-name">${entry.name}</span><span class="file-meta">${entry.type} ${entry.size ?? 0}b</span></div>`;
+}
+
+async function openFile(path) {
+  const sid = state.selectedId || $("sandbox-id").value.trim();
+  if (!sid) return;
+  try {
+    const r = await json(`/v1/sandboxes/${sid}/files/content?path=${encodeURIComponent(path)}`);
+    $("file-path").value = r.data.path;
+    $("file-content").value = r.data.content || "";
+  } catch (e) {
+    $("file-content").value = `[file read failed] ${e.message}`;
+  }
+}
+
+async function saveFile() {
+  const sid = state.selectedId || $("sandbox-id").value.trim();
+  const path = $("file-path").value.trim();
+  if (!sid || !path) {
+    alert("Select a sandbox and enter a file path.");
+    return;
+  }
+  const btn = $("save-file");
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Saving…";
+  try {
+    await json(`/v1/sandboxes/${sid}/files/content`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path, content: $("file-content").value }),
+    });
+    const parent = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) || "/workspace" : "/workspace";
+    $("files-path").value = parent;
+    await loadFiles();
+    await loadEvents(sid);
+    btn.textContent = "Saved";
+    setTimeout(() => (btn.textContent = old), 1000);
+  } catch (e) {
+    alert(`Save failed: ${e.message}`);
+    btn.textContent = old;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function setRoute(name) {
   document.querySelectorAll(".topnav a").forEach((a) => {
     a.classList.toggle("active", a.dataset.route === name);
@@ -357,6 +439,7 @@ function setRoute(name) {
   const target = document.getElementById(`panel-${name}`) || document.getElementById("panel-sandboxes");
   target.scrollIntoView({ behavior: "smooth", block: "start" });
   if (name === "events") loadEvents();
+  if (name === "files") loadFiles();
 }
 
 function handleHash() {
@@ -367,6 +450,12 @@ function handleHash() {
 $("refresh").addEventListener("click", refresh);
 $("create").addEventListener("click", createSandbox);
 $("run").addEventListener("click", runCommand);
+$("load-files").addEventListener("click", loadFiles);
+$("refresh-files").addEventListener("click", loadFiles);
+$("save-file").addEventListener("click", saveFile);
+$("files-path").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") loadFiles();
+});
 $("load-events").addEventListener("click", () => loadEvents());
 $("refresh-events").addEventListener("click", () => loadEvents());
 $("copy-events").addEventListener("click", copyEvents);

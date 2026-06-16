@@ -76,6 +76,9 @@ Core endpoints:
 - `POST /v1/sandboxes/{sandbox_id}/release`
 - `POST /v1/sandboxes/{sandbox_id}/lease`
 - `GET /v1/sandboxes/{sandbox_id}/events?after=N`
+- `GET /v1/sandboxes/{sandbox_id}/files?path=/workspace`
+- `GET /v1/sandboxes/{sandbox_id}/files/content?path=/workspace/file.txt`
+- `PUT /v1/sandboxes/{sandbox_id}/files/content`
 - `POST /v1/sandboxes/{sandbox_id}/commands`
 - `GET /v1/sandboxes/{sandbox_id}/commands`
 - `GET /v1/sandboxes/{sandbox_id}/commands/{command_id}`
