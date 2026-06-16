@@ -3,6 +3,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   sandboxes: [],
   selectedId: null,
+  lastEvents: [],
 };
 
 async function json(url, opts) {
@@ -55,14 +56,22 @@ function capsRow(caps) {
 }
 
 function stateBadge(s) {
-  const cls = { ready: "ready", pending: "pending", released: "released", failed: "failed" }[s] || "muted";
+  const cls = {
+    ready: "ready",
+    pending: "pending",
+    pending_client: "pending",
+    released: "released",
+    releasing: "released",
+    degraded: "warn",
+    failed: "failed",
+  }[s] || "muted";
   return `<span class="pill ${cls}">${s}</span>`;
 }
 
 function renderStats(list) {
   $("stat-total").textContent = list.length;
   $("stat-ready").textContent = list.filter((x) => x.state === "ready").length;
-  $("stat-pending").textContent = list.filter((x) => x.state === "pending").length;
+  $("stat-pending").textContent = list.filter((x) => x.state === "pending" || x.state === "pending_client").length;
   $("stat-released").textContent = list.filter((x) => x.state === "released").length;
 }
 
@@ -84,7 +93,15 @@ function renderSandboxes() {
         <td>${capsRow(x.capabilities)}</td>
         <td><span class="meta" title="${x.lease?.expires_at ?? ""}">${x.lease ? fmtTTL(x.lease.expires_at) : "—"}</span></td>
         <td class="col-age"><span class="meta">${fmtAge(x.inserted_at)}</span></td>
-        <td class="col-act"><button class="btn tiny" data-act="select">Select</button></td>
+        <td class="col-act">
+          <span class="row-actions">
+            <button class="btn tiny" data-act="select">Select</button>
+            <button class="btn tiny" data-act="run">Run</button>
+            <button class="btn tiny" data-act="events">Events</button>
+            <button class="btn tiny" data-act="extend">+30m</button>
+            <button class="btn tiny danger" data-act="release">Release</button>
+          </span>
+        </td>
       </tr>`
     )
     .join("");
@@ -93,24 +110,61 @@ function renderSandboxes() {
     const id = tr.dataset.id;
     tr.addEventListener("click", (e) => {
       if (e.target.closest("button")) return;
-      selectSandbox(id);
+      selectSandbox(id, { scroll: false });
     });
-    tr.querySelector('[data-act="select"]').addEventListener("click", (e) => {
-      e.stopPropagation();
-      selectSandbox(id);
+    tr.querySelectorAll("button[data-act]").forEach((button) => {
+      button.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        await handleSandboxAction(id, button.dataset.act, button);
+      });
     });
   });
 }
 
-function selectSandbox(id) {
+async function handleSandboxAction(id, action, button) {
+  if (action === "select") return selectSandbox(id);
+  if (action === "run") {
+    selectSandbox(id, { route: "run" });
+    return;
+  }
+  if (action === "events") {
+    selectSandbox(id, { route: "events" });
+    await loadEvents(id);
+    return;
+  }
+  if (action === "extend") return withBusy(button, "+30m…", async () => extendLease(id));
+  if (action === "release") return withBusy(button, "Releasing…", async () => releaseSandbox(id));
+}
+
+async function withBusy(button, label, fn) {
+  const old = button.textContent;
+  button.disabled = true;
+  button.textContent = label;
+  try {
+    await fn();
+  } catch (e) {
+    appendTerm(`\n[action failed] ${e.message}\n`, "ev-err");
+  } finally {
+    button.disabled = false;
+    button.textContent = old;
+  }
+}
+
+function selectSandbox(id, opts = {}) {
   state.selectedId = id;
   $("sandbox-id").value = id;
+  $("events-sandbox-id").value = id;
   const sb = state.sandboxes.find((x) => x.id === id);
   $("sel-summary").textContent = sb
     ? `${sb.id} · ${sb.environment}/${sb.template} · ${sb.state}`
     : id;
   renderSandboxes();
-  document.getElementById("panel-run").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  if (opts.route) {
+    location.hash = `#/${opts.route}`;
+    setRoute(opts.route);
+  } else if (opts.scroll !== false) {
+    document.getElementById("panel-run").scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
 }
 
 async function refresh() {
@@ -125,6 +179,12 @@ async function refresh() {
     state.sandboxes = s.data || [];
     renderStats(state.sandboxes);
     renderSandboxes();
+    if (state.selectedId && !state.sandboxes.some((x) => x.id === state.selectedId)) {
+      state.selectedId = null;
+      $("sandbox-id").value = "";
+      $("events-sandbox-id").value = "";
+      $("sel-summary").textContent = "no sandbox selected";
+    }
   } catch (e) {
     $("sandboxes").innerHTML = `<tr class="empty"><td colspan="8">Failed to load: ${e.message}</td></tr>`;
   }
@@ -139,10 +199,11 @@ async function createSandbox() {
     const r = await json("/v1/sandboxes", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: "{}",
+      body: JSON.stringify({ environment: "local", template: "dev" }),
     });
-    await refresh();
-    selectSandbox(r.data.id);
+    await refreshUntilReady(r.data.id);
+    selectSandbox(r.data.id, { route: "run" });
+    appendTerm(`\n[created sandbox ${r.data.id}]\n`, "ev-ok");
   } catch (e) {
     appendTerm(`\n[create failed] ${e.message}\n`, "ev-err");
   } finally {
@@ -151,17 +212,39 @@ async function createSandbox() {
   }
 }
 
+async function refreshUntilReady(id) {
+  for (let i = 0; i < 20; i++) {
+    await refresh();
+    const sb = state.sandboxes.find((x) => x.id === id);
+    if (!sb || sb.state === "ready" || sb.state === "released" || sb.state === "failed") return;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+
+async function extendLease(id) {
+  await json(`/v1/sandboxes/${id}/lease`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ttl_ms: 30 * 60 * 1000 }),
+  });
+  await refresh();
+  if (state.selectedId === id) await loadEvents(id);
+}
+
+async function releaseSandbox(id) {
+  if (!confirm(`Release sandbox ${id}? Running commands will be disconnected.`)) return;
+  await json(`/v1/sandboxes/${id}/release`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  await refresh();
+  if (state.selectedId === id) await loadEvents(id);
+}
+
 function setTermStatus(label, cls) {
   const el = $("term-status");
   el.className = "term-status mono " + (cls || "");
   el.textContent = label;
 }
-function setTermTitle(t) {
-  $("term-title").textContent = t;
-}
-function clearTerm() {
-  $("output").innerHTML = "";
-}
+function setTermTitle(t) { $("term-title").textContent = t; }
+function clearTerm() { $("output").innerHTML = ""; }
 function appendTerm(text, cls) {
   const span = document.createElement("span");
   if (cls) span.className = cls;
@@ -221,7 +304,7 @@ async function runCommand() {
         setTermStatus(`exited ${code}`, code === 0 ? "exited" : "failed");
         done = true;
       } else if (e.type === "command.failed") {
-        appendTerm(`\n[failed]\n`, "ev-err");
+        appendTerm(`\n[failed] ${e.data?.message || ""}\n`, "ev-err");
         setTermStatus("failed", "failed");
         done = true;
       } else if (e.type === "command.killed") {
@@ -232,6 +315,38 @@ async function runCommand() {
     }
   }
   if (!done) setTermStatus("timeout", "failed");
+  await loadEvents(sid);
+}
+
+async function loadEvents(id = $("events-sandbox-id").value.trim() || state.selectedId) {
+  if (!id) {
+    $("events-output").textContent = "Select a sandbox to inspect its event stream.";
+    return;
+  }
+  $("events-sandbox-id").value = id;
+  try {
+    const r = await json(`/v1/sandboxes/${id}/events`);
+    state.lastEvents = r.data || [];
+    $("events-output").textContent = state.lastEvents.length
+      ? state.lastEvents.map(formatEvent).join("\n")
+      : `No events for ${id}.`;
+  } catch (e) {
+    $("events-output").textContent = `[event load failed] ${e.message}`;
+  }
+}
+
+function formatEvent(e) {
+  const data = e.data && Object.keys(e.data).length ? " " + JSON.stringify(e.data) : "";
+  return `${String(e.seq).padStart(4, "0")} ${e.timestamp} ${e.type}${data}`;
+}
+
+async function copyEvents() {
+  const text = state.lastEvents.length ? JSON.stringify(state.lastEvents, null, 2) : $("events-output").textContent;
+  await navigator.clipboard.writeText(text);
+  const btn = $("copy-events");
+  const old = btn.textContent;
+  btn.textContent = "Copied";
+  setTimeout(() => (btn.textContent = old), 1000);
 }
 
 function setRoute(name) {
@@ -239,13 +354,9 @@ function setRoute(name) {
     a.classList.toggle("active", a.dataset.route === name);
   });
   document.getElementById("crumbs").innerHTML = `<span class="crumb">${name}</span>`;
-  if (name === "run") {
-    document.getElementById("panel-run").scrollIntoView({ behavior: "smooth", block: "start" });
-  } else if (name === "sandboxes") {
-    document.getElementById("panel-sandboxes").scrollIntoView({ behavior: "smooth", block: "start" });
-  } else if (name === "events") {
-    document.getElementById("panel-sandboxes").scrollIntoView({ behavior: "smooth", block: "start" });
-  }
+  const target = document.getElementById(`panel-${name}`) || document.getElementById("panel-sandboxes");
+  target.scrollIntoView({ behavior: "smooth", block: "start" });
+  if (name === "events") loadEvents();
 }
 
 function handleHash() {
@@ -256,6 +367,12 @@ function handleHash() {
 $("refresh").addEventListener("click", refresh);
 $("create").addEventListener("click", createSandbox);
 $("run").addEventListener("click", runCommand);
+$("load-events").addEventListener("click", () => loadEvents());
+$("refresh-events").addEventListener("click", () => loadEvents());
+$("copy-events").addEventListener("click", copyEvents);
+$("events-sandbox-id").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") loadEvents();
+});
 $("command").addEventListener("keydown", (e) => {
   if (e.key === "Enter") runCommand();
 });

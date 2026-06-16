@@ -18,7 +18,7 @@ mise run build
 mise run run:dev
 ```
 
-Then open the printed `/ui/` URL or use the API under `/v1`.
+Then open `http://127.0.0.1:6464/ui/` or use the API under `http://127.0.0.1:6464/v1`.
 
 ## Current status
 

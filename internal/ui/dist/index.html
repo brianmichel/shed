@@ -62,7 +62,7 @@
               <th>Capabilities</th>
               <th>Lease</th>
               <th class="col-age">Age</th>
-              <th class="col-act"></th>
+              <th class="col-act">Actions</th>
             </tr>
           </thead>
           <tbody id="sandboxes">
@@ -96,6 +96,24 @@
         </div>
         <pre id="output" class="term-body">Select a sandbox and run a command. Events stream here.</pre>
       </div>
+    </section>
+
+    <section class="panel" id="panel-events">
+      <header class="panel-head">
+        <h2>Events</h2>
+        <div class="actions">
+          <button class="btn ghost" id="refresh-events">Refresh events</button>
+          <button class="btn ghost" id="copy-events">Copy JSON</button>
+        </div>
+      </header>
+      <div class="event-toolbar">
+        <label class="field grow">
+          <span class="label">Sandbox</span>
+          <input id="events-sandbox-id" class="mono" placeholder="select a sandbox" autocomplete="off" />
+        </label>
+        <button class="btn" id="load-events">Load events</button>
+      </div>
+      <pre id="events-output" class="events-body">Select a sandbox to inspect its event stream.</pre>
     </section>
   </main>
 

@@ -501,7 +501,7 @@ a { color: inherit; text-decoration: none; }
 }
 .col-id  { width: 220px; }
 .col-age { width: 90px; }
-.col-act { width: 100px; text-align: right; }
+.col-act { width: 310px; text-align: right; }
 .tbl td.col-act { text-align: right; }
 
 .id   { font-family: var(--font-mono); font-size: var(--fs-mono-md); color: var(--color-text); }
@@ -655,3 +655,41 @@ a { color: inherit; text-decoration: none; }
 .term-body .ev     { color: var(--term-fg-dim); }
 .term-body .ev-err { color: var(--term-fg-err); }
 .term-body .ev-ok  { color: var(--term-fg-ok); }
+.btn.danger {
+  color: var(--red-700);
+  border-color: var(--red-400);
+}
+.btn.danger:hover {
+  background: var(--red-50);
+}
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.row-actions {
+  display: inline-flex;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+}
+.event-toolbar {
+  display: flex;
+  gap: var(--sp-4);
+  padding: var(--sp-6) var(--sp-7);
+  border-bottom: var(--bw-1) solid var(--color-border);
+  align-items: end;
+}
+.events-body {
+  margin: 0;
+  padding: var(--sp-6) var(--sp-7);
+  min-height: 220px;
+  max-height: 420px;
+  overflow: auto;
+  font-family: var(--font-mono);
+  font-size: var(--fs-mono-sm);
+  line-height: var(--lh-normal);
+  color: var(--color-text-2);
+  background: var(--color-surface-alt);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

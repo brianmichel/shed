@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/brianmichel/shed/internal/client"
+	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/server"
 	"github.com/brianmichel/shed/internal/store"
 )
@@ -19,7 +20,7 @@ type Config struct {
 
 func Run(ctx context.Context, cfg Config) error {
 	if cfg.Addr == "" {
-		cfg.Addr = "127.0.0.1:0"
+		cfg.Addr = "127.0.0.1:6464"
 	}
 	if cfg.WorkspaceRoot == "" {
 		cfg.WorkspaceRoot = ".shed-dev/workspace"
@@ -29,7 +30,14 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	st := store.NewMemoryStore()
-	srv := server.New(server.Config{Addr: cfg.Addr, UIEnabled: cfg.UIEnabled}, st)
+	var srv *server.Server
+	srv = server.New(server.Config{
+		Addr:      cfg.Addr,
+		UIEnabled: cfg.UIEnabled,
+		OnSandboxCreated: func(ctx context.Context, sb model.Sandbox, sess model.ClientSession) {
+			startClient(ctx, srv, sb, sess, abs)
+		},
+	}, st)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()
 	for i := 0; i < 100 && srv.Addr() == cfg.Addr; i++ {
@@ -39,15 +47,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	cli, err := client.New(client.Config{ServerURL: srv.ClientURL(), SessionKey: sess.SessionKey, SessionID: sess.SessionID, SandboxID: sb.ID, WorkspaceRoot: abs, HeartbeatEvery: 5 * time.Second})
-	if err != nil {
-		return err
-	}
-	go func() {
-		if err := cli.Run(ctx); err != nil && ctx.Err() == nil {
-			log.Printf("[dev] client stopped: %v", err)
-		}
-	}()
+	startClient(ctx, srv, sb, sess, abs)
 	log.Printf("[dev] server: http://%s", srv.Addr())
 	log.Printf("[dev] ui:     http://%s/ui/", srv.Addr())
 	log.Printf("[dev] sandbox_id=%s session_id=%s workspace=%s", sb.ID, sess.SessionID, abs)
@@ -57,4 +57,17 @@ func Run(ctx context.Context, cfg Config) error {
 	case err := <-errCh:
 		return err
 	}
+}
+
+func startClient(ctx context.Context, srv *server.Server, sb model.Sandbox, sess model.ClientSession, workspaceRoot string) {
+	cli, err := client.New(client.Config{ServerURL: srv.ClientURL(), SessionKey: sess.SessionKey, SessionID: sess.SessionID, SandboxID: sb.ID, WorkspaceRoot: workspaceRoot, HeartbeatEvery: 5 * time.Second})
+	if err != nil {
+		log.Printf("[dev] failed to create client sandbox_id=%s: %v", sb.ID, err)
+		return
+	}
+	go func() {
+		if err := cli.Run(ctx); err != nil && ctx.Err() == nil {
+			log.Printf("[dev] client stopped sandbox_id=%s: %v", sb.ID, err)
+		}
+	}()
 }

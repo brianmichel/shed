@@ -48,7 +48,7 @@ func usage() { fmt.Fprintln(os.Stderr, "usage: shed <server|client|dev> [flags]"
 
 func runServer(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	addr := fs.String("addr", envOr("SHED_ADDR", "127.0.0.1:8080"), "HTTP listen address")
+	addr := fs.String("addr", envOr("SHED_ADDR", "127.0.0.1:6464"), "HTTP listen address")
 	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
 	_ = fs.String("config", "", "config file path (reserved)")
 	if err := fs.Parse(args); err != nil {
@@ -59,7 +59,7 @@ func runServer(ctx context.Context, args []string) error {
 
 func runClient(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("client", flag.ExitOnError)
-	serverURL := fs.String("server", envOr("SHED_SERVER_URL", "ws://127.0.0.1:8080/v1/client/connect"), "server websocket URL")
+	serverURL := fs.String("server", envOr("SHED_SERVER_URL", "ws://127.0.0.1:6464/v1/client/connect"), "server websocket URL")
 	sessionKey := fs.String("session-key", envOr("SHED_SESSION_KEY", ""), "client session key")
 	sessionID := fs.String("session-id", envOr("SHED_SESSION_ID", ""), "client session id")
 	sandboxID := fs.String("sandbox-id", envOr("SHED_SANDBOX_ID", ""), "sandbox id")
@@ -77,7 +77,7 @@ func runClient(ctx context.Context, args []string) error {
 
 func runDev(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("dev", flag.ExitOnError)
-	addr := fs.String("addr", envOr("SHED_DEV_ADDR", "127.0.0.1:0"), "HTTP listen address")
+	addr := fs.String("addr", envOr("SHED_DEV_ADDR", "127.0.0.1:6464"), "HTTP listen address")
 	workspace := fs.String("workspace-root", envOr("SHED_DEV_WORKSPACE", ".shed-dev/workspace"), "workspace root")
 	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
 	_ = fs.String("config", "", "config file path (reserved)")

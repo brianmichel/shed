@@ -22,8 +22,9 @@ import (
 )
 
 type Config struct {
-	Addr      string
-	UIEnabled bool
+	Addr             string
+	UIEnabled        bool
+	OnSandboxCreated func(context.Context, model.Sandbox, model.ClientSession)
 }
 
 type Server struct {
@@ -48,7 +49,7 @@ type clientConn struct {
 
 func New(cfg Config, st store.Store) *Server {
 	if cfg.Addr == "" {
-		cfg.Addr = "127.0.0.1:8080"
+		cfg.Addr = "127.0.0.1:6464"
 	}
 	if st == nil {
 		st = store.NewMemoryStore()
@@ -157,6 +158,9 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeStoreErr(w, err)
 		return
+	}
+	if s.cfg.OnSandboxCreated != nil {
+		go s.cfg.OnSandboxCreated(context.Background(), sb, sess)
 	}
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": sb, "client_session": sess, "connect_url": s.ClientURL()})
 }

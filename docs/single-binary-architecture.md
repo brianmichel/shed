@@ -43,7 +43,7 @@ Responsibilities:
 
 ### `shed dev`
 
-Starts server and client on one machine using the same production code paths:
+Starts server and client on one machine using the same production code paths. By default it listens on `127.0.0.1:6464`.
 
 1. Start server components and HTTP listener.
 2. Create a sandbox/session through server state paths.
