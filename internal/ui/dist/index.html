@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shed</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#172033;background:#f6f8fb}body{margin:0}.top{background:#101828;color:white;padding:18px 28px;display:flex;justify-content:space-between;align-items:center}.brand{font-weight:800;font-size:20px}.wrap{max-width:1120px;margin:28px auto;padding:0 20px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px}.card{background:white;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 8px 28px rgba(16,24,40,.06)}.muted{color:#667085}.pill{display:inline-block;border-radius:999px;padding:3px 10px;background:#eef4ff;color:#3538cd;font-size:12px;font-weight:700}.ok{background:#ecfdf3;color:#027a48}.warn{background:#fff8e6;color:#9a6700}button{background:#155eef;color:white;border:0;border-radius:9px;padding:9px 12px;font-weight:700;cursor:pointer}input{padding:9px;border:1px solid #d0d5dd;border-radius:9px;min-width:260px}pre{background:#0b1020;color:#d1e7ff;padding:14px;border-radius:10px;overflow:auto}.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.list{display:grid;gap:10px;margin-top:12px}.item{padding:12px;border:1px solid #e5e7eb;border-radius:10px;background:#fff}</style>
+</head>
+<body>
+<header class="top"><div><div class="brand">Shed</div><div class="muted">single-binary sandbox control plane</div></div><span id="health" class="pill">loading</span></header>
+<main class="wrap">
+  <section class="grid">
+    <div class="card"><div class="muted">Sandboxes</div><h2 id="sandbox-count">0</h2></div>
+    <div class="card"><div class="muted">Ready</div><h2 id="ready-count">0</h2></div>
+    <div class="card"><div class="muted">API</div><h2>/v1</h2></div>
+  </section>
+  <section class="card" style="margin-top:18px">
+    <div class="row"><h2 style="margin-right:auto">Sandboxes</h2><button id="refresh">Refresh</button><button id="create">Create sandbox</button></div>
+    <div id="sandboxes" class="list"></div>
+  </section>
+  <section class="card" style="margin-top:18px">
+    <h2>Run command</h2>
+    <p class="muted">Select a ready sandbox and run a command. Output appears as replayed command events.</p>
+    <div class="row"><input id="sandbox-id" placeholder="sandbox id"/><input id="command" value="echo hello from shed"/><button id="run">Run</button></div>
+    <pre id="output">No command yet.</pre>
+  </section>
+</main>
+<script src="/ui/app.js"></script>
+</body>
+</html>

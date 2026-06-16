@@ -2,12 +2,15 @@
 
 ## Shed: repository intent
 
-Shed is a two-part system for provisioning sandbox compute and operating it through a secure, observable, and auditable control plane.
+Shed is a single-binary Go system for provisioning-facing control and in-compute execution of sandbox workloads.
 
-- `garden/` is the control plane, API surface, and orchestration layer.
-- `seed/` is the in-sandbox daemon that executes work and reports back to Garden.
+The runtime model is inspired by HashiCorp Nomad:
 
-This repository exists to give downstream consumers a powerful remote execution model **without sacrificing observability, security, or auditability**.
+- `shed server` owns the control plane, API, state, leases, event replay, client session broker, and embedded operator UI.
+- `shed client` runs inside the target compute and owns local command/file execution, process control, workspace enforcement, and event reporting.
+- `shed dev` runs both roles locally while faithfully exercising production auth, sessions, heartbeats, leases, commands, events, and UI paths.
+
+The architecture source of truth is `docs/single-binary-architecture.md`.
 
 ## What we are optimizing for
 
@@ -17,123 +20,70 @@ Every meaningful lifecycle transition should be visible.
 
 Prefer designs that make it easy to answer:
 
-- what sandbox was created, when, and why
+- what sandbox/allocation was created, when, and why
+- what client session connected and with which capabilities
 - what command ran, under which session, and with what outcome
 - what events were emitted, in what order, and whether they can be replayed
-- where failures happened: Garden, transport, or Seed
-
-When making changes, favor:
-
-- explicit state machines
-- durable event streams
-- correlation IDs, request IDs, session IDs, and sandbox IDs
-- resumable/replayable streams over ephemeral in-memory-only behavior
-- clear operator-facing logs and machine-readable events
-
-### 2. Security by default
-
-The system should assume hostile networks, untrusted workloads, and accidental misuse.
+- where failures happened: server, transport, or client
 
 Favor:
 
-- least-privilege boundaries between Garden and Seed
-- explicit authentication and scoped credentials
+- explicit state machines
+- durable/replayable event streams
+- correlation IDs, request IDs, session IDs, sandbox IDs, command IDs, and event sequences
+- resumable streams over ephemeral-only behavior
+- clear operator logs and machine-readable events
+
+### 2. Security by default
+
+Assume hostile networks, untrusted workloads, and accidental misuse.
+
+Favor:
+
+- least-privilege boundaries between server and client packages
+- explicit authentication and scoped session credentials
 - narrow, validated command and file-operation surfaces
-- safe defaults for workspace and process isolation
-- avoiding implicit trust between control plane, transport, and sandbox
-
-Security-sensitive changes should preserve or improve:
-
-- tenant/session isolation
-- command authorization boundaries
-- secret handling
-- workspace-root enforcement
-- kill/cancel semantics that do not leave orphaned processes behind
+- strict workspace-root enforcement in client mode
+- cancel/kill semantics that do not leave orphaned process groups behind
+- no implicit trust between API, broker, protocol, and local execution
 
 ### 3. Auditability as a product feature
 
-We are not just executing remote work; we are building a system that can explain what happened afterward.
+Shed should explain what happened after the fact.
 
 Favor:
 
 - append-only event histories where practical
 - stable schemas for lifecycle and command events
-- idempotent APIs for acquire/release/start/cancel flows
+- idempotent acquire/release/start/cancel flows
 - timestamps, actor/source attribution, and durable identifiers
-- behavior that can be reconstructed after disconnects or retries
+- state that can be reconstructed after disconnects or retries
 
 ### 4. Power for downstream consumers
 
-Consumers should be able to build rich automation on top of Shed without needing undocumented behavior.
+Consumers should build rich automation without reverse-engineering internals.
 
 Favor:
 
-- stable contracts over convenience shortcuts
-- capability-oriented APIs
+- stable contracts over shortcuts
+- capability-oriented API/protocol design
 - predictable command lifecycle semantics
-- transport-agnostic resource models
+- transport-aware but resource-oriented APIs
 - forward-compatible protocol evolution
-
-## Sub-project roles
-
-### `garden/`
-
-Garden owns:
-
-- sandbox acquisition and release
-- lease/lifecycle management
-- API contracts and external integration
-- event durability and replay surfaces
-- coordination with connected Seed instances
-
-Garden should be the source of truth for:
-
-- resource state
-- control-plane policy
-- externally visible IDs and event ordering contracts
-
-### `seed/`
-
-Seed owns:
-
-- booting inside the sandbox workload
-- authenticating back to Garden
-- command execution and process control
-- stdout/stderr streaming
-- local file and workspace interactions
-- host-local capabilities exposed to Garden
-
-Seed should be optimized for:
-
-- reliable execution
-- strict workspace scoping
-- clean process lifecycle handling
-- accurate status/event reporting back to Garden
 
 ## Working rules for agents
 
 When changing this repository:
 
-- preserve the Garden/Seed boundary; do not blur control-plane and in-sandbox responsibilities
-- prefer explicit protocol messages and state transitions over implicit coupling
-- make new behaviors observable with logs/events/IDs
+- preserve the server/client boundary even though both live in one Go module
+- keep `shed dev` production-faithful; do not bypass auth/session/lease/event paths for convenience
+- route all state mutations through `internal/store.Store`
+- make new behavior observable with logs/events/IDs
 - treat security and auditability regressions as correctness bugs
-- document new cross-cutting contracts near the top level or in the owning sub-project
-
-## Directional questions to keep asking
-
-A good change should make it easier to answer:
-
-- Can an operator see what happened?
-- Can a customer trust the isolation boundary?
-- Can we reconstruct the sequence of events later?
-- Can downstream consumers build against this without reverse-engineering internals?
+- remove dead code rather than carrying compatibility slop
+- document cross-cutting contracts in `docs/single-binary-architecture.md` or nearby package docs
 
 ## Local documentation map
 
 - Top-level overview: `README.md`
-- Garden details: `garden/README.md`
-- Garden prototype scope: `garden/docs/prototype-focus.md`
-- Garden-specific agent guidance: `garden/AGENTS.md`
-
-If `seed/` grows its own README or AGENTS document, keep it aligned with the principles above.
+- Go single-binary architecture: `docs/single-binary-architecture.md`
