@@ -1,85 +1,69 @@
-# Garden + Seed
+# Shed
 
-Garden + Seed is a two-part system for orchestrating remote sandbox workloads and controlling them through a unified, bidirectional interface.
+Shed is a single portable Go binary for controlling sandbox compute and running commands inside it.
 
-## Components
+Runtime modes:
 
-### `garden`
-Control plane and API for provisioning and managing sandbox compute.
+- `shed server` — control plane, API, client session broker, lease/event state, and embedded operator UI.
+- `shed client` — in-compute worker that connects to a server, registers capabilities, executes commands, and streams events.
+- `shed dev` — production-faithful local mode that runs server and client together while exercising real auth, sessions, heartbeats, leases, commands, events, and UI paths.
 
-Garden is responsible for:
-- starting workloads in Linux containers and macOS VMs
-- tracking sandbox lifecycle and metadata
-- issuing actions to running sandboxes through a unified interface
-- brokering communication with the in-sandbox agent
-- exposing higher-level APIs for automation, task execution, and environment control
+See [`docs/single-binary-architecture.md`](docs/single-binary-architecture.md) for the architecture.
 
-### `seed`
-In-sandbox daemon written in Go.
+## Quick start
 
-Seed is responsible for:
-- booting inside each Linux container or macOS VM
-- authenticating with Garden using an API key and API URL
-- establishing a bidirectional control channel back to Garden
-- executing commands and streaming output
-- cancelling or killing processes
-- searching for, reading, and editing files
-- exposing additional host-local capabilities needed for sandbox automation
+```sh
+mise run test
+mise run build
+mise run run:dev
+```
 
-## How the system fits together
+Then open `http://127.0.0.1:6464/ui/` or use the API under `http://127.0.0.1:6464/v1`.
 
-1. Garden provisions a unit of compute.
-2. The workload boots with `seed` running inside it.
-3. Seed connects back to Garden using its configured credentials.
-4. Garden issues actions over the control channel.
-5. Seed performs those actions inside the sandbox and streams results back.
+## Current status
 
-This model avoids requiring a direct inbound connection to the container or VM while still allowing rich remote control.
+The root Go module contains the single-binary foundation:
 
-## Goals
+- CLI for `server`, `client`, and `dev`.
+- In-memory store behind interfaces.
+- Server/client WebSocket protocol envelope.
+- Command execution, stdout/stderr events, stdin/cancel/kill dispatch path.
+- Replayable JSON/SSE event endpoints.
+- Embedded minimal UI served from the binary.
 
-- one control model for Linux containers and macOS VMs
-- secure, authenticated communication between control plane and agent
-- real-time command execution and output streaming
-- process lifecycle control
-- file system inspection and mutation
-- extensible protocol for future sandbox capabilities
+## Core journey
+
+1. Server creates a logical sandbox/allocation and issues client credentials.
+2. Client runs inside the target compute and connects with those credentials.
+3. Server marks the sandbox ready after client registration.
+4. API/UI starts commands and dispatches them to the client.
+5. Client executes within its workspace root and streams command events.
+6. Consumers replay ordered events by cursor.
+7. Releasing the sandbox closes the client path and marks state terminal.
+
+## Tooling
+
+Root `mise.toml` pins Go and defines repeatable tasks:
+
+- `mise run fmt`
+- `mise run test`
+- `mise run build`
+- `mise run run:server`
+- `mise run run:client`
+- `mise run run:dev` — run dev mode with Air hot reload
+- `mise run run:dev:once` — run dev mode once without hot reload
+- `mise run ui:check`
 
 ## Repository layout
 
 ```text
-.
-├── garden/   # API and control plane
-└── seed/     # Go daemon running inside each sandbox
+cmd/shed/          CLI entrypoint
+internal/api/      JSON response/error helpers
+internal/client/   in-compute client runtime
+internal/dev/      local production-faithful orchestration
+internal/model/    shared resource models
+internal/protocol/ protocol envelope
+internal/server/   control plane and broker
+internal/store/    store interfaces and memory implementation
+internal/ui/       embedded frontend
 ```
-
-## Expected configuration
-
-At a minimum, `seed` will be configured with:
-- API key
-- Garden API / control plane URL
-
-Additional environment-specific configuration will likely be added within each component.
-
-## Development notes
-
-This repository is intentionally split into two components:
-- `garden` owns orchestration, lifecycle, APIs, and coordination
-- `seed` owns execution inside the target environment
-
-Component-specific setup, architecture, and agent instructions should live in:
-- `garden/README.md`
-- `garden/AGENT.md`
-- `seed/README.md`
-- `seed/AGENT.md`
-
-## Future areas to define
-
-- wire protocol / message schema between Garden and Seed
-- authentication and key rotation model
-- reconnect and heartbeat semantics
-- sandbox capability negotiation
-- audit logging and observability
-- execution isolation and permission model
-- artifact upload/download flows
-- session multiplexing and concurrency rules

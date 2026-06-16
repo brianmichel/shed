@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Shed</title>
+  <link rel="stylesheet" href="/ui/app.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="#/sandboxes">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Shed</span>
+      </a>
+      <nav class="topnav" aria-label="Primary">
+        <a href="#/sandboxes" data-route="sandboxes">Sandboxes</a>
+        <a href="#/run" data-route="run">Run</a>
+        <a href="#/files" data-route="files">Files</a>
+        <a href="#/events" data-route="events">Events</a>
+      </nav>
+      <div class="topmeta">
+        <span class="kv"><span class="k">api</span><span class="v mono">/v1</span></span>
+        <span class="kv health" id="health">
+          <span class="dot" aria-hidden="true"></span>
+          <span class="v" id="health-text">connecting</span>
+        </span>
+      </div>
+    </div>
+  </header>
+
+  <section class="subbar">
+    <div class="subbar-inner">
+      <div class="crumbs" id="crumbs">
+        <span class="crumb">sandboxes</span>
+      </div>
+      <div class="stats" id="stats">
+        <span class="stat"><span class="stat-k">total</span><span class="stat-v mono" id="stat-total">0</span></span>
+        <span class="stat"><span class="stat-k">ready</span><span class="stat-v mono" id="stat-ready">0</span></span>
+        <span class="stat"><span class="stat-k">pending</span><span class="stat-v mono" id="stat-pending">0</span></span>
+        <span class="stat"><span class="stat-k">released</span><span class="stat-v mono" id="stat-released">0</span></span>
+      </div>
+    </div>
+  </section>
+
+  <main class="wrap">
+    <section class="panel" id="panel-sandboxes">
+      <header class="panel-head">
+        <h2>Sandboxes</h2>
+        <div class="actions">
+          <button class="btn ghost" id="refresh">Refresh</button>
+          <button class="btn primary" id="create">+ New sandbox</button>
+        </div>
+      </header>
+      <div class="tbl-wrap">
+        <table class="tbl" id="sandbox-tbl">
+          <thead>
+            <tr>
+              <th class="col-id">ID</th>
+              <th>State</th>
+              <th>Environment</th>
+              <th>Template</th>
+              <th>Capabilities</th>
+              <th>Lease</th>
+              <th class="col-age">Age</th>
+              <th class="col-act">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="sandboxes">
+            <tr class="empty"><td colspan="8">Loading sandboxes…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-run">
+      <header class="panel-head">
+        <h2>Run command</h2>
+        <div class="sel" id="sel-summary">no sandbox selected</div>
+      </header>
+      <div class="runbar">
+        <label class="field">
+          <span class="label">Sandbox</span>
+          <input id="sandbox-id" class="mono" placeholder="sbx_…" autocomplete="off" />
+        </label>
+        <label class="field grow">
+          <span class="label">Command</span>
+          <input id="command" class="mono" value="echo hello from shed" autocomplete="off" />
+        </label>
+        <button class="btn primary" id="run">Execute</button>
+      </div>
+      <div class="terminal" id="term">
+        <div class="term-head">
+          <span class="t-dot t-r"></span><span class="t-dot t-y"></span><span class="t-dot t-g"></span>
+          <span class="term-title mono" id="term-title">no command</span>
+          <span class="term-status mono" id="term-status">idle</span>
+        </div>
+        <pre id="output" class="term-body">Select a sandbox and run a command. Events stream here.</pre>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-files">
+      <header class="panel-head">
+        <h2>Files</h2>
+        <div class="actions">
+          <button class="btn ghost" id="refresh-files">Refresh files</button>
+          <button class="btn primary" id="save-file">Save file</button>
+        </div>
+      </header>
+      <div class="file-layout">
+        <div class="file-browser">
+          <div class="file-toolbar">
+            <label class="field grow">
+              <span class="label">Directory</span>
+              <input id="files-path" class="mono" value="/workspace" autocomplete="off" />
+            </label>
+            <button class="btn" id="load-files">Load</button>
+          </div>
+          <div id="files-list" class="files-list">Select a sandbox and load files.</div>
+        </div>
+        <div class="file-editor">
+          <label class="field">
+            <span class="label">File path</span>
+            <input id="file-path" class="mono" placeholder="/workspace/hello.txt" autocomplete="off" />
+          </label>
+          <textarea id="file-content" class="file-content" spellcheck="false" placeholder="Open or create a file…"></textarea>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-events">
+      <header class="panel-head">
+        <h2>Events</h2>
+        <div class="actions">
+          <button class="btn ghost" id="refresh-events">Refresh events</button>
+          <button class="btn ghost" id="copy-events">Copy JSON</button>
+        </div>
+      </header>
+      <div class="event-toolbar">
+        <label class="field grow">
+          <span class="label">Sandbox</span>
+          <input id="events-sandbox-id" class="mono" placeholder="select a sandbox" autocomplete="off" />
+        </label>
+        <button class="btn" id="load-events">Load events</button>
+      </div>
+      <pre id="events-output" class="events-body">Select a sandbox to inspect its event stream.</pre>
+    </section>
+  </main>
+
+  <script src="/ui/app.js"></script>
+</body>
+</html>

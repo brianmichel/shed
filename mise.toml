@@ -1,0 +1,38 @@
+[tools]
+go = "1.24.4"
+
+[tasks.fmt]
+description = "Format Go code"
+run = "gofmt -w cmd internal"
+
+[tasks.test]
+description = "Run Go tests"
+run = "go test ./..."
+
+[tasks.build]
+description = "Build the shed binary"
+run = "go build -o bin/shed ./cmd/shed"
+
+[tasks."run:server"]
+description = "Run shed in server mode"
+run = "go run ./cmd/shed server"
+
+[tasks."run:client"]
+description = "Run shed in client mode; pass args after --"
+run = "go run ./cmd/shed client"
+
+[tasks."run:dev"]
+description = "Run production-faithful local dev mode with Air hot reload"
+run = "go run github.com/air-verse/air@v1.62.0 -c .air.toml"
+
+[tasks."run:dev:once"]
+description = "Run production-faithful local dev mode without hot reload"
+run = "go run ./cmd/shed dev"
+
+[tasks."ui:check"]
+description = "Verify embedded UI assets are present"
+run = "test -f internal/ui/dist/index.html && go test ./internal/ui"
+
+[tasks."ui:build"]
+description = "Build UI assets (currently static embedded assets)"
+run = "mise run ui:check"
