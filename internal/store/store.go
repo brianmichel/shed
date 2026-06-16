@@ -8,10 +8,21 @@ import (
 )
 
 type SandboxCreate struct {
-	Environment string
-	Template    string
-	TTL         time.Duration
-	Metadata    map[string]string
+	Environment       string
+	Template          string
+	TTL               time.Duration
+	Compute           string
+	ComputeAPIVersion string
+	ComputeConfig     map[string]string
+	Metadata          map[string]string
+}
+
+type SandboxAllocationUpdate struct {
+	Compute              string
+	ComputeAPIVersion    string
+	ComputePluginVersion string
+	ExternalAllocationID string
+	ComputeMetadata      map[string]string
 }
 
 type CommandCreate struct {
@@ -28,6 +39,7 @@ type Store interface {
 	ListSandboxes(ctx context.Context) ([]model.Sandbox, error)
 	GetSandbox(ctx context.Context, sandboxID string) (model.Sandbox, error)
 	UpdateSandboxState(ctx context.Context, sandboxID string, state model.SandboxState) (model.Sandbox, error)
+	UpdateSandboxAllocation(ctx context.Context, sandboxID string, in SandboxAllocationUpdate) (model.Sandbox, error)
 	ExtendLease(ctx context.Context, sandboxID string, ttl time.Duration) (model.Lease, error)
 
 	AuthenticateSession(ctx context.Context, sandboxID, sessionKey string) (model.ClientSession, error)

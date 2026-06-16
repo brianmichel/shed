@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/brianmichel/shed/internal/api"
+	"github.com/brianmichel/shed/internal/compute"
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/protocol"
 	"github.com/brianmichel/shed/internal/store"
@@ -22,9 +23,10 @@ import (
 )
 
 type Config struct {
-	Addr             string
-	UIEnabled        bool
-	OnSandboxCreated func(context.Context, model.Sandbox, model.ClientSession)
+	Addr           string
+	UIEnabled      bool
+	ComputeManager *compute.Manager
+	DefaultCompute string
 }
 
 type Server struct {
@@ -36,6 +38,7 @@ type Server struct {
 	upgrader websocket.Upgrader
 	mu       sync.Mutex
 	clients  map[string]*clientConn
+	allocMgr *compute.Manager
 }
 
 type clientConn struct {
@@ -55,7 +58,14 @@ func New(cfg Config, st store.Store) *Server {
 	if st == nil {
 		st = store.NewMemoryStore()
 	}
-	s := &Server{cfg: cfg, store: st, mux: http.NewServeMux(), clients: map[string]*clientConn{}, upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}}
+	allocMgr := cfg.ComputeManager
+	if allocMgr == nil {
+		allocMgr = compute.NewManager(compute.ManagerConfig{DefaultCompute: cfg.DefaultCompute})
+	}
+	s := &Server{cfg: cfg, store: st, mux: http.NewServeMux(), clients: map[string]*clientConn{}, allocMgr: allocMgr, upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}}
+	allocMgr.SetEventSink(func(ctx context.Context, sandboxID, eventType string, data map[string]any) {
+		_, _ = s.store.AppendEvent(ctx, sandboxID, "", eventType, data)
+	})
 	s.routes()
 	return s
 }
@@ -76,7 +86,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 	s.listener = ln
 	s.http = &http.Server{Handler: s.mux, ReadHeaderTimeout: 5 * time.Second}
-	go func() { <-ctx.Done(); _ = s.http.Shutdown(context.Background()) }()
+	go func() { <-ctx.Done(); _ = s.http.Shutdown(context.Background()); _ = s.allocMgr.Close() }()
 	go s.leaseSweeper(ctx)
 	log.Printf("[server] listening on http://%s", ln.Addr())
 	err = s.http.Serve(ln)
@@ -87,7 +97,30 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) CreateSandbox(ctx context.Context, in store.SandboxCreate) (model.Sandbox, model.ClientSession, error) {
-	return s.store.CreateSandbox(ctx, in)
+	return s.createAndAllocateSandbox(ctx, in)
+}
+
+func (s *Server) createAndAllocateSandbox(ctx context.Context, in store.SandboxCreate) (model.Sandbox, model.ClientSession, error) {
+	if in.Compute == "" {
+		in.Compute = s.allocMgr.DefaultCompute()
+	}
+	if in.ComputeAPIVersion == "" {
+		in.ComputeAPIVersion = compute.APIVersionV1
+	}
+	sb, sess, err := s.store.CreateSandbox(ctx, in)
+	if err != nil {
+		return model.Sandbox{}, model.ClientSession{}, err
+	}
+	resp, err := s.allocMgr.Allocate(ctx, compute.AllocateRequest{APIVersion: in.ComputeAPIVersion, ComputeDriver: in.Compute, SandboxID: sb.ID, SessionID: sess.SessionID, SessionKey: sess.SessionKey, ConnectURL: s.ClientURL(), Environment: sb.Environment, Template: sb.Template, LeaseTTLMillis: sb.Lease.TTLMillis, LeaseExpiresAt: sb.Lease.ExpiresAt, Config: in.ComputeConfig, Metadata: in.Metadata})
+	if err != nil {
+		_, _ = s.store.UpdateSandboxState(ctx, sb.ID, model.SandboxFailed)
+		return sb, sess, err
+	}
+	sb, err = s.store.UpdateSandboxAllocation(ctx, sb.ID, store.SandboxAllocationUpdate{Compute: in.Compute, ComputeAPIVersion: resp.APIVersion, ComputePluginVersion: resp.PluginVersion, ExternalAllocationID: resp.ExternalID, ComputeMetadata: resp.Metadata})
+	if err != nil {
+		return model.Sandbox{}, model.ClientSession{}, err
+	}
+	return sb, sess, nil
 }
 
 func (s *Server) leaseSweeper(ctx context.Context) {
@@ -109,6 +142,7 @@ func (s *Server) leaseSweeper(ctx context.Context) {
 				}
 				if !sb.Lease.ExpiresAt.IsZero() && now.After(sb.Lease.ExpiresAt) {
 					_, _ = s.store.AppendEvent(ctx, sb.ID, "", "sandbox.lease.expired", map[string]any{"expires_at": sb.Lease.ExpiresAt})
+					_, _ = s.allocMgr.Release(ctx, sb.Compute, compute.ReleaseRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, Config: sb.ComputeConfig, Reason: "lease_expired"})
 					s.closeClientForSandbox(sb.ID)
 					_, _ = s.store.UpdateSandboxState(ctx, sb.ID, model.SandboxReleased)
 				}
@@ -151,6 +185,9 @@ func (s *Server) routes() {
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Environment, Template string
+		Compute               string            `json:"compute_driver"`
+		ComputeAPIVersion     string            `json:"compute_api_version"`
+		ComputeConfig         map[string]string `json:"compute_config"`
 		Lease                 struct {
 			TTLMS int64 `json:"ttl_ms"`
 		} `json:"lease"`
@@ -158,13 +195,14 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	ttl := time.Duration(in.Lease.TTLMS) * time.Millisecond
-	sb, sess, err := s.store.CreateSandbox(r.Context(), store.SandboxCreate{Environment: in.Environment, Template: in.Template, TTL: ttl, Metadata: in.Metadata})
+	sb, sess, err := s.createAndAllocateSandbox(r.Context(), store.SandboxCreate{Environment: in.Environment, Template: in.Template, TTL: ttl, Compute: in.Compute, ComputeAPIVersion: in.ComputeAPIVersion, ComputeConfig: in.ComputeConfig, Metadata: in.Metadata})
 	if err != nil {
-		writeStoreErr(w, err)
+		if errors.Is(err, compute.ErrComputeNotFound) {
+			api.WriteError(w, http.StatusUnprocessableEntity, "compute_not_found", err.Error(), false)
+			return
+		}
+		api.WriteError(w, http.StatusBadGateway, "allocation_failed", err.Error(), true)
 		return
-	}
-	if s.cfg.OnSandboxCreated != nil {
-		go s.cfg.OnSandboxCreated(context.Background(), sb, sess)
 	}
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": sb, "client_session": sess, "connect_url": s.ClientURL()})
 }
@@ -182,6 +220,9 @@ func (s *Server) getSandbox(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
+	if sb.State != model.SandboxReleased && sb.State != model.SandboxFailed {
+		_, _ = s.allocMgr.Status(r.Context(), sb.Compute, compute.StatusRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, Config: sb.ComputeConfig})
+	}
 	api.WriteJSON(w, 200, map[string]any{"data": sb})
 }
 func (s *Server) releaseSandbox(w http.ResponseWriter, r *http.Request) {
@@ -189,6 +230,11 @@ func (s *Server) releaseSandbox(w http.ResponseWriter, r *http.Request) {
 	sb, err := s.store.UpdateSandboxState(r.Context(), id, model.SandboxReleasing)
 	if err != nil {
 		writeStoreErr(w, err)
+		return
+	}
+	_, err = s.allocMgr.Release(r.Context(), sb.Compute, compute.ReleaseRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, Config: sb.ComputeConfig, Reason: "api_release"})
+	if err != nil {
+		api.WriteError(w, http.StatusBadGateway, "compute_release_failed", err.Error(), true)
 		return
 	}
 	s.closeClientForSandbox(id)
@@ -204,9 +250,20 @@ func (s *Server) extendLease(w http.ResponseWriter, r *http.Request) {
 		TTLMS int64 `json:"ttl_ms"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
-	lease, err := s.store.ExtendLease(r.Context(), r.PathValue("sandbox_id"), time.Duration(in.TTLMS)*time.Millisecond)
+	sandboxID := r.PathValue("sandbox_id")
+	sb, err := s.store.GetSandbox(r.Context(), sandboxID)
 	if err != nil {
 		writeStoreErr(w, err)
+		return
+	}
+	lease, err := s.store.ExtendLease(r.Context(), sandboxID, time.Duration(in.TTLMS)*time.Millisecond)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	_, err = s.allocMgr.Renew(r.Context(), sb.Compute, compute.RenewRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, LeaseTTLMillis: lease.TTLMillis, LeaseExpiresAt: lease.ExpiresAt, Config: sb.ComputeConfig})
+	if err != nil {
+		api.WriteError(w, http.StatusBadGateway, "compute_renew_failed", err.Error(), true)
 		return
 	}
 	api.WriteJSON(w, 200, map[string]any{"data": lease})
@@ -293,8 +350,13 @@ func (s *Server) createCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	cc := s.getClient(sess.SessionID)
-	if cc == nil {
-		api.WriteError(w, 409, "client_not_connected", "Client is not connected", true)
+	sb, err := s.store.GetSandbox(r.Context(), id)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	if cc == nil && !s.allocMgr.SupportsExec(r.Context(), sb.Compute, sb.ComputeAPIVersion) {
+		api.WriteError(w, 409, "client_not_connected", "Client is not connected and compute driver does not support exec", true)
 		return
 	}
 	cmd, err := s.store.CreateCommand(r.Context(), id, in)
@@ -302,12 +364,29 @@ func (s *Server) createCommand(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	if err := cc.send("command.start", map[string]any{"command_id": cmd.ID, "command": cmd.Command, "cwd": cmd.Cwd, "env": cmd.Env, "stdin": cmd.Stdin, "timeout_ms": cmd.TimeoutMS}); err != nil {
-		api.WriteError(w, 502, "dispatch_failed", err.Error(), true)
-		return
+	if cc != nil {
+		if err := cc.send("command.start", map[string]any{"command_id": cmd.ID, "command": cmd.Command, "cwd": cmd.Cwd, "env": cmd.Env, "stdin": cmd.Stdin, "timeout_ms": cmd.TimeoutMS}); err != nil {
+			api.WriteError(w, 502, "dispatch_failed", err.Error(), true)
+			return
+		}
+	} else {
+		go s.execViaCompute(context.Background(), sb, cmd)
 	}
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
 }
+func (s *Server) execViaCompute(ctx context.Context, sb model.Sandbox, cmd model.Command) {
+	err := s.allocMgr.Exec(ctx, sb.Compute, compute.ExecRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: cmd.ID, Command: cmd.Command, Cwd: cmd.Cwd, Env: cmd.Env, Stdin: cmd.Stdin, TimeoutMS: cmd.TimeoutMS, Config: sb.ComputeConfig, Metadata: cmd.Metadata}, func(ev compute.ExecEvent) error {
+		if ev.CommandID == "" {
+			ev.CommandID = cmd.ID
+		}
+		s.handleCommandEventPayload(ctx, sb.ID, ev.CommandID, ev.Type, ev.Data)
+		return nil
+	})
+	if err != nil {
+		s.handleCommandEventPayload(ctx, sb.ID, cmd.ID, "command.failed", map[string]any{"command_id": cmd.ID, "message": err.Error(), "completed_at": time.Now().UTC().Format(time.RFC3339)})
+	}
+}
+
 func (s *Server) listCommands(w http.ResponseWriter, r *http.Request) {
 	xs, err := s.store.ListCommands(r.Context(), r.PathValue("sandbox_id"))
 	if err != nil {
@@ -354,21 +433,43 @@ func (s *Server) commandEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) dispatchCommandControl(w http.ResponseWriter, r *http.Request, typ string, payload map[string]any) {
-	sess, err := s.store.FindSessionBySandbox(r.Context(), r.PathValue("sandbox_id"))
+	sandboxID := r.PathValue("sandbox_id")
+	commandID := r.PathValue("command_id")
+	sess, err := s.store.FindSessionBySandbox(r.Context(), sandboxID)
 	if err != nil {
 		writeStoreErr(w, err)
 		return
 	}
 	cc := s.getClient(sess.SessionID)
-	if cc == nil {
-		api.WriteError(w, 409, "client_not_connected", "Client is not connected", true)
+	if cc != nil {
+		if err := cc.send(typ, payload); err != nil {
+			api.WriteError(w, 502, "dispatch_failed", err.Error(), true)
+			return
+		}
+		api.WriteJSON(w, 200, map[string]any{"data": map[string]bool{"accepted": true}})
 		return
 	}
-	if err := cc.send(typ, payload); err != nil {
+	sb, err := s.store.GetSandbox(r.Context(), sandboxID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	var resp compute.ExecControlResponse
+	switch typ {
+	case "command.stdin":
+		data, _ := payload["data"].(string)
+		resp, err = s.allocMgr.Stdin(r.Context(), sb.Compute, compute.ExecStdinRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, Data: data})
+	case "command.cancel":
+		grace, _ := number(payload["grace_period_ms"])
+		resp, err = s.allocMgr.Cancel(r.Context(), sb.Compute, compute.ExecSignalRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, GracePeriodMS: int64(grace)})
+	case "command.kill":
+		resp, err = s.allocMgr.Kill(r.Context(), sb.Compute, compute.ExecSignalRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, Signal: "KILL"})
+	}
+	if err != nil {
 		api.WriteError(w, 502, "dispatch_failed", err.Error(), true)
 		return
 	}
-	api.WriteJSON(w, 200, map[string]any{"data": map[string]bool{"accepted": true}})
+	api.WriteJSON(w, 200, map[string]any{"data": map[string]bool{"accepted": resp.Accepted}})
 }
 
 func (s *Server) clientConnect(w http.ResponseWriter, r *http.Request) {
@@ -471,39 +572,47 @@ func (s *Server) updateCommandFromPayload(ctx context.Context, msg protocol.Mess
 	if cmdID == "" {
 		return
 	}
-	cmd, err := s.store.GetCommand(ctx, msg.SandboxID, cmdID)
+	s.handleCommandEventPayload(ctx, msg.SandboxID, cmdID, eventType, msg.Payload)
+}
+
+func (s *Server) handleCommandEventPayload(ctx context.Context, sandboxID, cmdID, eventType string, payload map[string]any) {
+	if payload == nil {
+		payload = map[string]any{}
+	}
+	if payload["command_id"] == nil {
+		payload["command_id"] = cmdID
+	}
+	cmd, err := s.store.GetCommand(ctx, sandboxID, cmdID)
 	if err == nil {
 		now := time.Now().UTC()
-		if state != "" {
-			cmd.State = state
-		}
-		if eventType == "command.started" {
-			if pid, ok := number(msg.Payload["pid"]); ok {
+		switch eventType {
+		case "command.accepted":
+			cmd.State = model.CommandStarting
+		case "command.started":
+			cmd.State = model.CommandRunning
+			if pid, ok := number(payload["pid"]); ok {
 				cmd.PID = int(pid)
 			}
 			cmd.StartedAt = &now
-		}
-		if eventType == "command.exit" {
+		case "command.exit":
 			code := 0
-			if n, ok := number(msg.Payload["exit_code"]); ok {
+			if n, ok := number(payload["exit_code"]); ok {
 				code = int(n)
 			}
 			cmd.ExitCode = &code
 			cmd.State = model.CommandExited
 			cmd.CompletedAt = &now
-		}
-		if eventType == "command.killed" {
+		case "command.killed":
 			cmd.State = model.CommandKilled
 			cmd.Signal = "KILL"
 			cmd.CompletedAt = &now
-		}
-		if eventType == "command.failed" {
+		case "command.failed":
 			cmd.State = model.CommandFailed
 			cmd.CompletedAt = &now
 		}
 		_, _ = s.store.UpdateCommand(ctx, cmd)
 	}
-	_, _ = s.store.AppendEvent(ctx, msg.SandboxID, cmdID, eventType, msg.Payload)
+	_, _ = s.store.AppendEvent(ctx, sandboxID, cmdID, eventType, payload)
 }
 
 func (cc *clientConn) send(typ string, payload map[string]any) error {

@@ -7,10 +7,12 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/brianmichel/shed/internal/client"
+	"github.com/brianmichel/shed/internal/compute"
 	"github.com/brianmichel/shed/internal/dev"
 	"github.com/brianmichel/shed/internal/server"
 	"github.com/brianmichel/shed/internal/store"
@@ -50,11 +52,20 @@ func runServer(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	addr := fs.String("addr", envOr("SHED_ADDR", "127.0.0.1:6464"), "HTTP listen address")
 	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
+	defaultCompute := fs.String("compute-driver", envOr("SHED_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
+	workspace := fs.String("compute-workspace-root", envOr("SHED_COMPUTE_WORKSPACE", ".shed-server/workspace"), "workspace root for the built-in local compute")
+	var plugins pluginConfigFlag
+	plugins.setMany(envOr("SHED_COMPUTE_PLUGINS", ""))
+	fs.Var(&plugins, "compute-plugin", "external compute plugin as name=/path/to/plugin; repeatable")
 	_ = fs.String("config", "", "config file path (reserved)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return server.New(server.Config{Addr: *addr, UIEnabled: *uiEnabled}, store.NewMemoryStore()).Start(ctx)
+	mgr, err := buildComputeManager(ctx, *defaultCompute, *workspace, plugins)
+	if err != nil {
+		return err
+	}
+	return server.New(server.Config{Addr: *addr, UIEnabled: *uiEnabled, ComputeManager: mgr, DefaultCompute: *defaultCompute}, store.NewMemoryStore()).Start(ctx)
 }
 
 func runClient(ctx context.Context, args []string) error {
@@ -80,11 +91,60 @@ func runDev(ctx context.Context, args []string) error {
 	addr := fs.String("addr", envOr("SHED_DEV_ADDR", "127.0.0.1:6464"), "HTTP listen address")
 	workspace := fs.String("workspace-root", envOr("SHED_DEV_WORKSPACE", ".shed-dev/workspace"), "workspace root")
 	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
+	defaultCompute := fs.String("compute-driver", envOr("SHED_DEV_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
+	var plugins pluginConfigFlag
+	plugins.setMany(envOr("SHED_DEV_COMPUTE_PLUGINS", ""))
+	fs.Var(&plugins, "compute-plugin", "external compute plugin as name=/path/to/plugin; repeatable")
 	_ = fs.String("config", "", "config file path (reserved)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	return dev.Run(ctx, dev.Config{Addr: *addr, WorkspaceRoot: *workspace, UIEnabled: *uiEnabled})
+	externals, err := plugins.externalConfigs()
+	if err != nil {
+		return err
+	}
+	return dev.Run(ctx, dev.Config{Addr: *addr, WorkspaceRoot: *workspace, UIEnabled: *uiEnabled, DefaultCompute: *defaultCompute, ExternalComputes: externals})
+}
+
+type pluginConfigFlag []string
+
+func (f *pluginConfigFlag) String() string { return strings.Join(*f, ",") }
+func (f *pluginConfigFlag) Set(v string) error {
+	if strings.TrimSpace(v) != "" {
+		*f = append(*f, strings.TrimSpace(v))
+	}
+	return nil
+}
+func (f *pluginConfigFlag) setMany(v string) {
+	for _, part := range strings.Split(v, ",") {
+		_ = f.Set(part)
+	}
+}
+func (f pluginConfigFlag) externalConfigs() ([]compute.ExternalPluginConfig, error) {
+	out := make([]compute.ExternalPluginConfig, 0, len(f))
+	for _, spec := range f {
+		name, command, ok := strings.Cut(spec, "=")
+		if !ok || strings.TrimSpace(name) == "" || strings.TrimSpace(command) == "" {
+			return nil, fmt.Errorf("compute plugin must be name=/path/to/plugin: %q", spec)
+		}
+		out = append(out, compute.ExternalPluginConfig{Name: strings.TrimSpace(name), Command: strings.TrimSpace(command)})
+	}
+	return out, nil
+}
+
+func buildComputeManager(ctx context.Context, defaultCompute, workspace string, plugins pluginConfigFlag) (*compute.Manager, error) {
+	externals, err := plugins.externalConfigs()
+	if err != nil {
+		return nil, err
+	}
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: defaultCompute})
+	_ = mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: workspace, HeartbeatEvery: 5 * time.Second}))
+	for _, ext := range externals {
+		if err := mgr.RegisterExternal(ext); err != nil {
+			return nil, err
+		}
+	}
+	return mgr, nil
 }
 
 func envOr(k, d string) string {

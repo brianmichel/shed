@@ -26,7 +26,7 @@ Runs only control-plane responsibilities:
 - Embedded operator UI under `/ui/`.
 - Health and diagnostics endpoints.
 
-The server does not provision compute in v1. It assumes a client binary will be placed inside the compute and connected using issued credentials.
+The server delegates compute provisioning and optional direct command execution to a compute driver. Drivers may be built in, such as the local workspace/process driver, or external HashiCorp go-plugin processes. The server still treats client WebSocket registration as the preferred readiness source of truth when a driver provisions `shed client`.
 
 ### `shed client`
 
@@ -46,10 +46,12 @@ Responsibilities:
 Starts server and client on one machine using the same production code paths. By default it listens on `127.0.0.1:6464`.
 
 1. Start server components and HTTP listener.
-2. Create a sandbox/session through server state paths.
-3. Start a client with generated credentials.
-4. Connect over the same WebSocket protocol.
-5. Use the same heartbeat, lease, command, event, release, and UI paths as production.
+2. Register the built-in local workspace/process compute driver.
+3. Create a sandbox/session through server state paths.
+4. Allocate through the same compute manager used by server mode.
+5. Start a client with generated credentials.
+6. Connect over the same WebSocket protocol.
+7. Use the same heartbeat, lease, command, event, release, and UI paths as production.
 
 ## Package layout
 
@@ -60,9 +62,11 @@ internal/client       In-compute client runtime and command runner
 internal/dev          Production-faithful local server+client orchestration
 internal/model        Shared resource types and state constants
 internal/protocol     Server/client envelope and message validation
-internal/server       HTTP server, broker, leases, events, and UI wiring
+internal/server       HTTP server, broker, leases, events, compute wiring, and UI wiring
 internal/store        Store interfaces and in-memory implementation
 internal/ui           Embedded frontend assets and UI handler
+internal/compute      Versioned compute driver interfaces, manager, and go-plugin adapter
+pkg/compute           Public SDK aliases for external compute plugin authors
 ```
 
 ## Public API shape
@@ -70,7 +74,7 @@ internal/ui           Embedded frontend assets and UI handler
 Core endpoints:
 
 - `GET /v1/health`
-- `POST /v1/sandboxes` — create a logical sandbox/allocation and issue client credentials.
+- `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, and call the selected compute driver.
 - `GET /v1/sandboxes`
 - `GET /v1/sandboxes/{sandbox_id}`
 - `POST /v1/sandboxes/{sandbox_id}/release`
@@ -124,9 +128,25 @@ All JSON errors use a stable machine-readable shape:
 - `killed`
 - `failed`
 
+### Compute lifecycle
+
+Each sandbox records compute driver identity, compute API version, external compute/allocation ID, compute config, and compute metadata. `POST /v1/sandboxes` persists the sandbox/session first, then calls compute `Allocate`. If allocation fails, Shed emits a compute failure event and marks the sandbox `failed`. The sandbox becomes `ready` when a provisioned `shed client` connects and registers, but drivers may also advertise direct `exec` support for command dispatch without a connected client.
+
+Compute plugins implement the versioned `compute.v1` lifecycle:
+
+- `Info` — plugin name/version/API-version/capability negotiation.
+- `Allocate` — create or attach to compute and start/provision `shed client`.
+- `Status` — report compute-side health/status without replacing client heartbeat readiness.
+- `Renew` — observe/perform compute-specific lease extension work.
+- `Release` — clean up compute-owned resources.
+- `Exec` — execute an API-created command and stream standard `command.*` events.
+- `Stdin`, `Cancel`, `Kill` — command control operations for plugin-executed commands.
+
+External compute drivers run as isolated child processes through HashiCorp go-plugin/gRPC. See [`compute-plugins.md`](compute-plugins.md).
+
 ### Lease lifecycle
 
-Each sandbox has a lease with TTL and expiry. Activity may extend the lease up to policy limits. A server sweeper emits expiration events and releases expired sandboxes.
+Each sandbox has a lease with TTL and expiry. Activity may extend the lease up to policy limits. Lease extension calls compute `Renew`. A server sweeper emits expiration events, calls compute `Release`, and releases expired sandboxes.
 
 ### Event model
 

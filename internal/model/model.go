@@ -42,15 +42,21 @@ type Lease struct {
 }
 
 type Sandbox struct {
-	ID           string            `json:"id"`
-	Environment  string            `json:"environment"`
-	Template     string            `json:"template"`
-	State        SandboxState      `json:"state"`
-	Metadata     map[string]string `json:"metadata,omitempty"`
-	Capabilities map[string]bool   `json:"capabilities,omitempty"`
-	Lease        Lease             `json:"lease"`
-	InsertedAt   time.Time         `json:"inserted_at"`
-	UpdatedAt    time.Time         `json:"updated_at"`
+	ID                   string            `json:"id"`
+	Environment          string            `json:"environment"`
+	Template             string            `json:"template"`
+	State                SandboxState      `json:"state"`
+	Compute              string            `json:"compute_driver,omitempty"`
+	ComputeAPIVersion    string            `json:"compute_api_version,omitempty"`
+	ComputePluginVersion string            `json:"compute_plugin_version,omitempty"`
+	ExternalAllocationID string            `json:"external_allocation_id,omitempty"`
+	ComputeConfig        map[string]string `json:"compute_config,omitempty"`
+	ComputeMetadata      map[string]string `json:"compute_metadata,omitempty"`
+	Metadata             map[string]string `json:"metadata,omitempty"`
+	Capabilities         map[string]bool   `json:"capabilities,omitempty"`
+	Lease                Lease             `json:"lease"`
+	InsertedAt           time.Time         `json:"inserted_at"`
+	UpdatedAt            time.Time         `json:"updated_at"`
 }
 
 type ClientSession struct {

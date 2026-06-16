@@ -54,7 +54,7 @@ func (s *MemoryStore) CreateSandbox(_ context.Context, in SandboxCreate) (model.
 		in.Template = "default"
 	}
 	id := newID("sbx")
-	sb := model.Sandbox{ID: id, Environment: in.Environment, Template: in.Template, State: model.SandboxPendingClient, Metadata: cloneStringMap(in.Metadata), Capabilities: map[string]bool{"commands": true, "files": true, "pty": false}, Lease: model.Lease{TTLMillis: in.TTL.Milliseconds(), ExpiresAt: now.Add(in.TTL)}, InsertedAt: now, UpdatedAt: now}
+	sb := model.Sandbox{ID: id, Environment: in.Environment, Template: in.Template, State: model.SandboxPendingClient, Compute: in.Compute, ComputeAPIVersion: in.ComputeAPIVersion, ComputeConfig: cloneStringMap(in.ComputeConfig), Metadata: cloneStringMap(in.Metadata), Capabilities: map[string]bool{"commands": true, "files": true, "pty": false}, Lease: model.Lease{TTLMillis: in.TTL.Milliseconds(), ExpiresAt: now.Add(in.TTL)}, InsertedAt: now, UpdatedAt: now}
 	sess := model.ClientSession{SessionID: newID("sess"), SessionKey: newID("seedkey"), SandboxID: id, State: model.SessionIssued, InsertedAt: now, UpdatedAt: now}
 	s.sandboxes[id] = sb
 	s.sessions[sess.SessionID] = sess
@@ -94,6 +94,34 @@ func (s *MemoryStore) UpdateSandboxState(_ context.Context, sandboxID string, st
 	sb.UpdatedAt = time.Now().UTC()
 	s.sandboxes[sandboxID] = sb
 	s.appendEventLocked(sandboxID, "", "sandbox."+string(state), map[string]any{"state": string(state)})
+	return sb, nil
+}
+
+func (s *MemoryStore) UpdateSandboxAllocation(_ context.Context, sandboxID string, in SandboxAllocationUpdate) (model.Sandbox, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sb, ok := s.sandboxes[sandboxID]
+	if !ok {
+		return model.Sandbox{}, ErrSandboxNotFound
+	}
+	if in.Compute != "" {
+		sb.Compute = in.Compute
+	}
+	if in.ComputeAPIVersion != "" {
+		sb.ComputeAPIVersion = in.ComputeAPIVersion
+	}
+	if in.ComputePluginVersion != "" {
+		sb.ComputePluginVersion = in.ComputePluginVersion
+	}
+	if in.ExternalAllocationID != "" {
+		sb.ExternalAllocationID = in.ExternalAllocationID
+	}
+	if in.ComputeMetadata != nil {
+		sb.ComputeMetadata = cloneStringMap(in.ComputeMetadata)
+	}
+	sb.UpdatedAt = time.Now().UTC()
+	s.sandboxes[sandboxID] = sb
+	s.appendEventLocked(sandboxID, "", "sandbox.allocation.updated", map[string]any{"compute": sb.Compute, "compute_api_version": sb.ComputeAPIVersion, "compute_plugin_version": sb.ComputePluginVersion, "external_allocation_id": sb.ExternalAllocationID})
 	return sb, nil
 }
 

@@ -26,6 +26,8 @@ The root Go module contains the single-binary foundation:
 
 - CLI for `server`, `client`, and `dev`.
 - In-memory store behind interfaces.
+- Versioned compute driver interface with HashiCorp go-plugin/gRPC adapter.
+- Built-in local workspace/process compute driver.
 - Server/client WebSocket protocol envelope.
 - Command execution, stdout/stderr events, stdin/cancel/kill dispatch path.
 - Replayable JSON/SSE event endpoints.
@@ -34,12 +36,12 @@ The root Go module contains the single-binary foundation:
 ## Core journey
 
 1. Server creates a logical sandbox/allocation and issues client credentials.
-2. Client runs inside the target compute and connects with those credentials.
-3. Server marks the sandbox ready after client registration.
-4. API/UI starts commands and dispatches them to the client.
-5. Client executes within its workspace root and streams command events.
+2. A compute driver allocates local or remote compute and may provision `shed client`.
+3. Server marks the sandbox ready after client registration, when a client path exists.
+4. API/UI starts commands and dispatches them to the client or to a compute driver that advertises direct exec support.
+5. The execution path streams command events.
 6. Consumers replay ordered events by cursor.
-7. Releasing the sandbox closes the client path and marks state terminal.
+7. Releasing the sandbox calls compute cleanup, closes the client path, and marks state terminal.
 
 ## Tooling
 
@@ -59,11 +61,13 @@ Root `mise.toml` pins Go and defines repeatable tasks:
 ```text
 cmd/shed/          CLI entrypoint
 internal/api/      JSON response/error helpers
+internal/compute/  compute driver interfaces, manager, and plugin adapter
 internal/client/   in-compute client runtime
-internal/dev/      local production-faithful orchestration
-internal/model/    shared resource models
-internal/protocol/ protocol envelope
-internal/server/   control plane and broker
-internal/store/    store interfaces and memory implementation
-internal/ui/       embedded frontend
+internal/dev/       local production-faithful orchestration
+internal/model/     shared resource models
+internal/protocol/  protocol envelope
+internal/server/    control plane and broker
+internal/store/     store interfaces and memory implementation
+internal/ui/        embedded frontend
+pkg/compute/       public compute plugin SDK aliases
 ```

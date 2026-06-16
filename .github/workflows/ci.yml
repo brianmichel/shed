@@ -25,8 +25,8 @@ jobs:
 
       - name: Verify formatting
         run: |
-          gofmt -w cmd internal
-          git diff --exit-code -- cmd internal
+          gofmt -w cmd internal pkg
+          git diff --exit-code -- cmd internal pkg
 
       - name: Test
         run: go test ./...
