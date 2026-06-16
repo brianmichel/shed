@@ -46,6 +46,10 @@ func (a *LocalCompute) Info(context.Context) (PluginInfo, error) {
 	return PluginInfo{Name: "local", Version: "0.1.0", APIVersions: []string{APIVersionV1}, Capabilities: map[string]bool{"local": true, "status": true, "renew": true, "release": true, "exec": true}}, nil
 }
 
+func (a *LocalCompute) DriverConfig() map[string]string {
+	return map[string]string{"workspace_root": a.cfg.WorkspaceRoot}
+}
+
 func (a *LocalCompute) Allocate(ctx context.Context, req AllocateRequest) (AllocateResponse, error) {
 	workspaceRoot := req.Config["workspace_root"]
 	if workspaceRoot == "" {

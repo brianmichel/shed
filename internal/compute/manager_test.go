@@ -20,6 +20,37 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+func TestManagerListDrivers(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewManager(ManagerConfig{DefaultCompute: "local"})
+	root := t.TempDir()
+	if err := mgr.RegisterBuiltin("local", NewLocalCompute(ctx, LocalConfig{WorkspaceRoot: root})); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RegisterExternal(ExternalPluginConfig{Name: "external", Command: "/bin/false", APIVersion: APIVersionV1, Env: map[string]string{"FOO": "bar"}}); err != nil {
+		t.Fatal(err)
+	}
+	drivers := mgr.ListDrivers(ctx)
+	if len(drivers) != 2 {
+		t.Fatalf("drivers=%#v", drivers)
+	}
+	byName := map[string]DriverDescriptor{}
+	for _, d := range drivers {
+		byName[d.Name] = d
+	}
+	local := byName["local"]
+	if local.Kind != "builtin" || !local.Default || !local.Loaded || local.Plugin == nil || local.Plugin.Name != "local" {
+		t.Fatalf("local=%#v", local)
+	}
+	if local.Config["workspace_root"] != root {
+		t.Fatalf("local config=%#v", local.Config)
+	}
+	external := byName["external"]
+	if external.Kind != "external" || external.Loaded || external.Command != "/bin/false" || external.Env["FOO"] != "bar" {
+		t.Fatalf("external=%#v", external)
+	}
+}
+
 func TestManagerBuiltinLifecycle(t *testing.T) {
 	ctx := context.Background()
 	fake := &fakeCompute{name: "builtin-test", version: "0.1.0", apiVersions: []string{APIVersionV1}}

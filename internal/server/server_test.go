@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +14,36 @@ import (
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/store"
 )
+
+func TestListComputeDrivers(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	root := t.TempDir()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "local"})
+	if err := mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: root})); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RegisterExternal(compute.ExternalPluginConfig{Name: "cloud", Command: "/opt/shed/cloud-plugin", APIVersion: compute.APIVersionV1}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{Addr: "127.0.0.1:0", ComputeManager: mgr, DefaultCompute: "local"}, st)
+	req := httptest.NewRequest(http.MethodGet, "/v1/compute/drivers", nil)
+	w := httptest.NewRecorder()
+	srv.listComputeDrivers(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data          []compute.DriverDescriptor `json:"data"`
+		DefaultDriver string                     `json:"default_driver"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.DefaultDriver != "local" || len(body.Data) != 2 {
+		t.Fatalf("body=%#v", body)
+	}
+}
 
 func TestCreateSandboxAllocationFailureMarksSandboxFailed(t *testing.T) {
 	ctx := context.Background()

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"sort"
 	"sync"
 	"time"
 
@@ -60,6 +61,75 @@ func NewManager(cfg ManagerConfig) *Manager {
 }
 
 func (m *Manager) DefaultCompute() string { return m.cfg.DefaultCompute }
+
+func (m *Manager) ListDrivers(ctx context.Context) []DriverDescriptor {
+	m.mu.Lock()
+	defaultName := m.cfg.DefaultCompute
+	builtins := make(map[string]ComputeV1, len(m.builtins))
+	for name, alloc := range m.builtins {
+		builtins[name] = alloc
+	}
+	externals := make(map[string]ExternalPluginConfig, len(m.externals))
+	for name, cfg := range m.externals {
+		externals[name] = cfg
+	}
+	loaded := make(map[string]PluginInfo, len(m.clients))
+	for name, client := range m.clients {
+		loaded[name] = client.info
+	}
+	m.mu.Unlock()
+
+	names := make([]string, 0, len(builtins)+len(externals))
+	seen := map[string]struct{}{}
+	for name := range builtins {
+		if _, ok := seen[name]; !ok {
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	for name := range externals {
+		if _, ok := seen[name]; !ok {
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+
+	out := make([]DriverDescriptor, 0, len(names))
+	for _, name := range names {
+		desc := DriverDescriptor{Name: name, Default: name == defaultName}
+		if alloc, ok := builtins[name]; ok {
+			desc.Kind = "builtin"
+			desc.Loaded = true
+			if cfg := driverConfig(alloc); len(cfg) > 0 {
+				desc.Config = cfg
+			}
+			callCtx, cancel := m.withCallTimeout(ctx)
+			info, err := alloc.Info(callCtx)
+			cancel()
+			if err != nil {
+				desc.Error = err.Error()
+			} else {
+				desc.Plugin = &info
+			}
+			out = append(out, desc)
+			continue
+		}
+		ext := externals[name]
+		desc.Kind = "external"
+		desc.Command = ext.Command
+		desc.Args = append([]string(nil), ext.Args...)
+		desc.Env = ext.Env
+		desc.APIVersion = ext.APIVersion
+		if info, ok := loaded[name]; ok {
+			desc.Loaded = true
+			infoCopy := info
+			desc.Plugin = &infoCopy
+		}
+		out = append(out, desc)
+	}
+	return out
+}
 
 func (m *Manager) SetEventSink(sink EventSink) {
 	m.mu.Lock()
@@ -383,6 +453,13 @@ func (m *Manager) emit(ctx context.Context, sandboxID, eventType string, data ma
 	if m.cfg.EventSink != nil && sandboxID != "" {
 		m.cfg.EventSink(ctx, sandboxID, eventType, data)
 	}
+}
+
+func driverConfig(alloc ComputeV1) map[string]string {
+	if cfg, ok := alloc.(interface{ DriverConfig() map[string]string }); ok {
+		return cfg.DriverConfig()
+	}
+	return nil
 }
 
 func restrictedEnv(env map[string]string) []string {

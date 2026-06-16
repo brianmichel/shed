@@ -9,7 +9,9 @@ const TABS = ["overview", "run", "files", "events"];
 
 const state = {
   sandboxes: [],
-  current: null,           // { view: "list" } | { view: "detail", id, tab }
+  computeDrivers: [],
+  computeSelected: null,
+  current: null,           // { view: "list" } | { view: "detail", id, tab } | { view: "compute" }
   detailSandbox: null,     // hydrated sandbox object for the detail view
   tabTimer: null,          // setInterval handle for tab-specific polling
 };
@@ -84,12 +86,27 @@ function fmtTimestamp(iso) {
   if (Number.isNaN(d.getTime())) return iso || "—";
   return d.toLocaleString(undefined, { hour12: false });
 }
-function capsRow(caps) {
+function clientCapsRow(caps) {
   return `<span class="caps">${[
     ["commands", !!caps?.commands],
     ["files", !!caps?.files],
     ["pty", !!caps?.pty],
   ].map(([k, on]) => `<span class="cap ${on ? "on" : "off"}">${k}</span>`).join("")}</span>`;
+}
+function computeExecFallback(plugin) {
+  const supported = !!plugin?.capabilities?.exec;
+  const cls = supported ? "ready" : "muted";
+  const label = supported ? "yes" : "no";
+  return `<span class="pill ${cls}" title="Run API commands via the plugin when no client is connected">${label}</span>`;
+}
+function kindBadge(kind, isDefault) {
+  const cls = kind === "builtin" ? "ready" : "pending";
+  const label = isDefault ? `${kind} · default` : kind;
+  return `<span class="pill ${cls}">${escapeHTML(label)}</span>`;
+}
+function loadBadge(loaded, err) {
+  if (err) return `<span class="pill failed">error</span>`;
+  return `<span class="pill ${loaded ? "ready" : "muted"}">${loaded ? "loaded" : "configured"}</span>`;
 }
 function stateBadge(s) {
   const cls = { ready: "ready", pending: "pending", released: "released", failed: "failed" }[s] || "muted";
@@ -145,7 +162,7 @@ function renderSandboxList() {
       <td>${stateBadge(x.state)}</td>
       <td><span class="meta">${escapeHTML(x.environment ?? "—")}</span></td>
       <td><span class="meta">${escapeHTML(x.template ?? "—")}</span></td>
-      <td>${capsRow(x.capabilities)}</td>
+      <td>${clientCapsRow(x.capabilities)}</td>
       <td><span class="meta" title="${x.lease?.expires_at ?? ""}">${x.lease ? fmtTTL(x.lease.expires_at) : "—"}</span></td>
       <td class="col-age"><span class="meta">${fmtAge(x.inserted_at)}</span></td>
       <td class="col-chev"><span class="chev" aria-hidden="true">›</span></td>
@@ -259,13 +276,19 @@ function renderOverview() {
     return;
   }
   const rows = [
+    ["Compute driver", `<span class="mono">${escapeHTML(sb.compute_driver || "—")}</span>`],
+    ["Compute API", `<span class="mono">${escapeHTML(sb.compute_api_version || "—")}</span>`],
+    ["Plugin version", `<span class="mono">${escapeHTML(sb.compute_plugin_version || "—")}</span>`],
+    ["External allocation", `<span class="mono">${escapeHTML(sb.external_allocation_id || "—")}</span>`],
     ["Environment", `<span class="mono">${escapeHTML(sb.environment)}</span>`],
     ["Template", `<span class="mono">${escapeHTML(sb.template)}</span>`],
-    ["Capabilities", capsRow(sb.capabilities)],
+    ["Client capabilities", clientCapsRow(sb.capabilities)],
     ["Lease TTL", `<span class="mono">${sb.lease ? Math.round(sb.lease.ttl_ms / 1000) + "s" : "—"}</span>`],
     ["Lease expires", `<span class="mono">${sb.lease ? fmtTimestamp(sb.lease.expires_at) + " (" + fmtTTL(sb.lease.expires_at) + ")" : "—"}</span>`],
     ["Created", `<span class="mono">${fmtTimestamp(sb.inserted_at)} (${fmtAge(sb.inserted_at)} ago)</span>`],
     ["Updated", `<span class="mono">${fmtTimestamp(sb.updated_at)}</span>`],
+    ["Compute config", `<pre class="kv-pre mono">${escapeHTML(JSON.stringify(sb.compute_config || {}, null, 2))}</pre>`],
+    ["Compute metadata", `<pre class="kv-pre mono">${escapeHTML(JSON.stringify(sb.compute_metadata || {}, null, 2))}</pre>`],
     ["Metadata", `<pre class="kv-pre mono">${escapeHTML(JSON.stringify(sb.metadata || {}, null, 2))}</pre>`],
   ];
   grid.innerHTML = rows.map(([k, v]) => `<div class="kv-row"><div class="kv-k">${k}</div><div class="kv-v">${v}</div></div>`).join("");
@@ -371,11 +394,127 @@ async function refreshEvents() {
   }
 }
 
+/* ───────────────────────── compute view ───────────────────────── */
+
+function renderComputeChrome() {
+  const list = state.computeDrivers;
+  const selected = state.computeSelected;
+  $("subbar-inner").innerHTML = `
+    <div class="crumbs"><span class="crumb current">compute drivers</span></div>
+    <div class="stats">
+      <span class="stat"><span class="stat-k">total</span><span class="stat-v mono" id="stat-compute-total">${list.length}</span></span>
+      <span class="stat"><span class="stat-k">built-in</span><span class="stat-v mono" id="stat-compute-builtin">${list.filter((x) => x.kind === "builtin").length}</span></span>
+      <span class="stat"><span class="stat-k">external</span><span class="stat-v mono" id="stat-compute-external">${list.filter((x) => x.kind === "external").length}</span></span>
+      <span class="stat"><span class="stat-k">default</span><span class="stat-v mono" id="stat-compute-default">${escapeHTML(list.find((x) => x.default)?.name || "—")}</span></span>
+    </div>
+    <div class="subbar-actions">
+      <button class="btn ghost" id="refresh-compute">Refresh</button>
+    </div>
+  `;
+  renderComputeList();
+  renderComputeDetail(selected);
+}
+
+function renderComputeList() {
+  const tbody = $("compute-drivers");
+  const wrap = $("compute-tbl-wrap");
+  const empty = $("compute-empty");
+  const list = state.computeDrivers;
+  if (!list.length) {
+    tbody.innerHTML = "";
+    if (wrap) wrap.hidden = true;
+    if (empty) empty.hidden = false;
+    $("compute-detail").hidden = true;
+    return;
+  }
+  if (wrap) wrap.hidden = false;
+  if (empty) empty.hidden = true;
+  tbody.innerHTML = list.map((d) => {
+    const plugin = d.plugin || {};
+    const selected = state.computeSelected === d.name;
+    return `
+    <tr data-name="${escapeHTML(d.name)}" class="${selected ? "selected" : ""}">
+      <td><span class="id">${escapeHTML(d.name)}</span></td>
+      <td>${kindBadge(d.kind, d.default)}</td>
+      <td><span class="meta">${escapeHTML(plugin.name || "—")}</span></td>
+      <td><span class="mono">${escapeHTML(plugin.version || "—")}</span></td>
+      <td><span class="mono">${escapeHTML((plugin.api_versions || []).join(", ") || "—")}</span></td>
+      <td>${computeExecFallback(plugin)}</td>
+      <td>${loadBadge(d.loaded, d.error)}</td>
+      <td class="col-chev"><span class="chev" aria-hidden="true">›</span></td>
+    </tr>`;
+  }).join("");
+
+  tbody.querySelectorAll("tr[data-name]").forEach((tr) => {
+    tr.addEventListener("click", () => {
+      state.computeSelected = tr.dataset.name;
+      renderComputeList();
+      renderComputeDetail(state.computeSelected);
+    });
+  });
+}
+
+function renderComputeDetail(name) {
+  const panel = $("compute-detail");
+  const grid = $("compute-kv");
+  const driver = state.computeDrivers.find((d) => d.name === name);
+  if (!driver) {
+    panel.hidden = true;
+    grid.innerHTML = "";
+    return;
+  }
+  panel.hidden = false;
+  const plugin = driver.plugin || {};
+  const rows = [
+    ["Driver", `<span class="mono">${escapeHTML(driver.name)}</span>`],
+    ["Kind", kindBadge(driver.kind, driver.default)],
+    ["Status", loadBadge(driver.loaded, driver.error)],
+    ["Plugin name", `<span class="mono">${escapeHTML(plugin.name || "—")}</span>`],
+    ["Plugin version", `<span class="mono">${escapeHTML(plugin.version || "—")}</span>`],
+    ["API versions", `<span class="mono">${escapeHTML((plugin.api_versions || []).join(", ") || "—")}</span>`],
+    ["Exec fallback", `${computeExecFallback(plugin)} <span class="meta">Run commands through the plugin when the client is disconnected.</span>`],
+  ];
+  if (driver.kind === "external") {
+    rows.push(["Command", `<span class="mono">${escapeHTML(driver.command || "—")}</span>`]);
+    rows.push(["Args", `<pre class="kv-pre mono">${escapeHTML(JSON.stringify(driver.args || [], null, 2))}</pre>`]);
+    rows.push(["Env", `<pre class="kv-pre mono">${escapeHTML(JSON.stringify(driver.env || {}, null, 2))}</pre>`]);
+    rows.push(["Configured API version", `<span class="mono">${escapeHTML(driver.api_version || "—")}</span>`]);
+  }
+  if (driver.config && Object.keys(driver.config).length) {
+    rows.push(["Driver config", `<pre class="kv-pre mono">${escapeHTML(JSON.stringify(driver.config, null, 2))}</pre>`]);
+  }
+  if (driver.error) {
+    rows.push(["Error", `<span class="mono ev-err">${escapeHTML(driver.error)}</span>`]);
+  }
+  grid.innerHTML = rows.map(([k, v]) => `<div class="kv-row"><div class="kv-k">${k}</div><div class="kv-v">${v}</div></div>`).join("");
+}
+
+async function refreshComputeDrivers() {
+  try {
+    const r = await json("/v1/compute/drivers");
+    state.computeDrivers = r.data || [];
+    if (state.current?.view === "compute") {
+      if (state.computeSelected && !state.computeDrivers.some((d) => d.name === state.computeSelected)) {
+        state.computeSelected = state.computeDrivers[0]?.name || null;
+      } else if (!state.computeSelected && state.computeDrivers.length) {
+        state.computeSelected = state.computeDrivers[0].name;
+      }
+      renderComputeChrome();
+    }
+  } catch (e) {
+    if (state.current?.view === "compute") {
+      $("compute-drivers").innerHTML = `<tr class="empty"><td colspan="8">Failed to load: ${escapeHTML(e.message)}</td></tr>`;
+      $("compute-detail").hidden = true;
+    }
+  }
+}
+
 /* ───────────────────────── router ───────────────────────── */
 
 function parseHash() {
   const h = (location.hash || "#/sandboxes").replace(/^#\/?/, "");
   const parts = h.split("/").filter(Boolean);
+  if (parts[0] === "compute") return { view: "compute" };
   if (parts[0] !== "sandboxes") return { view: "list" };
   if (parts.length === 1) return { view: "list" };
   const id = parts[1];
@@ -404,7 +543,21 @@ async function route() {
   const next = parseHash();
   state.current = next;
 
-  document.querySelectorAll(".topnav a").forEach((a) => a.classList.toggle("active", a.dataset.route === "sandboxes"));
+  document.querySelectorAll(".topnav a").forEach((a) => {
+    a.classList.toggle("active", a.dataset.route === (next.view === "compute" ? "compute" : next.view === "detail" || next.view === "list" ? "sandboxes" : ""));
+  });
+
+  if (next.view === "compute") {
+    stopTabPolling();
+    $("view-list").hidden = true;
+    $("view-detail").hidden = true;
+    $("view-compute").hidden = false;
+    renderComputeChrome();
+    await refreshComputeDrivers();
+    return;
+  }
+
+  $("view-compute").hidden = true;
 
   if (next.view === "list") {
     stopTabPolling();
@@ -451,6 +604,7 @@ async function route() {
 document.addEventListener("click", (e) => {
   const t = e.target;
   if (t.id === "refresh") refreshSandboxes();
+  else if (t.id === "refresh-compute") refreshComputeDrivers();
   else if (t.id === "create" || t.id === "create-empty") createSandbox();
   else if (t.id === "run") runCommand();
   else if (t.id === "release") releaseCurrent();
@@ -466,3 +620,4 @@ route();
 pollHealth();
 setInterval(pollHealth, 5000);
 setInterval(refreshSandboxes, 5000);
+setInterval(() => { if (state.current?.view === "compute") refreshComputeDrivers(); }, 10000);

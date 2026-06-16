@@ -74,6 +74,7 @@ pkg/compute           Public SDK aliases for external compute plugin authors
 Core endpoints:
 
 - `GET /v1/health`
+- `GET /v1/compute/drivers` — list registered compute drivers, server-side configuration, and plugin metadata.
 - `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, and call the selected compute driver.
 - `GET /v1/sandboxes`
 - `GET /v1/sandboxes/{sandbox_id}`

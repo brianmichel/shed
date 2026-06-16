@@ -23,6 +23,7 @@
       </a>
       <nav class="topnav" aria-label="Primary">
         <a href="#/sandboxes" data-route="sandboxes">Sandboxes</a>
+        <a href="#/compute" data-route="compute">Compute</a>
       </nav>
       <div class="topmeta">
         <span class="kv"><span class="k">api</span><span class="v mono">/v1</span></span>
@@ -70,6 +71,37 @@
           <button class="btn primary" id="create-empty">+ New sandbox</button>
         </div>
       </div>
+    </section>
+
+    <!-- COMPUTE VIEW -->
+    <section class="view" id="view-compute" hidden>
+      <div class="panel">
+        <div class="tbl-wrap" id="compute-tbl-wrap">
+          <table class="tbl" id="compute-tbl">
+            <thead>
+              <tr>
+                <th>Driver</th>
+                <th>Kind</th>
+                <th>Plugin</th>
+                <th>Version</th>
+                <th>API versions</th>
+                <th>Exec fallback</th>
+                <th>Status</th>
+                <th class="col-chev" aria-hidden="true"></th>
+              </tr>
+            </thead>
+            <tbody id="compute-drivers"></tbody>
+          </table>
+        </div>
+        <div id="compute-empty" class="empty-state" hidden>
+          <div class="empty-title">No compute drivers</div>
+          <div class="empty-body">Register built-in or external compute plugins when starting the server.</div>
+        </div>
+      </div>
+      <section class="panel" id="compute-detail" hidden>
+        <div class="panel-head"><h2>Configuration</h2></div>
+        <div class="kv-grid" id="compute-kv"></div>
+      </section>
     </section>
 
     <!-- DETAIL VIEW -->

@@ -16,6 +16,21 @@ type PluginInfo struct {
 	Capabilities map[string]bool `json:"capabilities,omitempty"`
 }
 
+// DriverDescriptor summarizes a registered compute driver for operator surfaces.
+type DriverDescriptor struct {
+	Name       string            `json:"name"`
+	Kind       string            `json:"kind"`
+	Default    bool              `json:"default"`
+	Command    string            `json:"command,omitempty"`
+	Args       []string          `json:"args,omitempty"`
+	Env        map[string]string `json:"env,omitempty"`
+	APIVersion string            `json:"api_version,omitempty"`
+	Config     map[string]string `json:"config,omitempty"`
+	Plugin     *PluginInfo       `json:"plugin,omitempty"`
+	Loaded     bool              `json:"loaded"`
+	Error      string            `json:"error,omitempty"`
+}
+
 type AllocateRequest struct {
 	APIVersion     string            `json:"api_version"`
 	ComputeDriver  string            `json:"compute_driver"`

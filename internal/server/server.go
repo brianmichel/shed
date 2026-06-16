@@ -155,6 +155,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, 200, map[string]any{"status": "ok", "time": time.Now().UTC()})
 	})
+	s.mux.HandleFunc("GET /v1/compute/drivers", s.listComputeDrivers)
 	s.mux.HandleFunc("GET /v1/sandboxes", s.listSandboxes)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.createSandbox)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}", s.getSandbox)
@@ -180,6 +181,11 @@ func (s *Server) routes() {
 		}
 		http.NotFound(w, r)
 	})
+}
+
+func (s *Server) listComputeDrivers(w http.ResponseWriter, r *http.Request) {
+	drivers := s.allocMgr.ListDrivers(r.Context())
+	api.WriteJSON(w, 200, map[string]any{"data": drivers, "default_driver": s.allocMgr.DefaultCompute()})
 }
 
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
