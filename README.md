@@ -50,7 +50,8 @@ Root `mise.toml` pins Go and defines repeatable tasks:
 - `mise run build`
 - `mise run run:server`
 - `mise run run:client`
-- `mise run run:dev`
+- `mise run run:dev` — run dev mode with Air hot reload
+- `mise run run:dev:once` — run dev mode once without hot reload
 - `mise run ui:check`
 
 ## Repository layout

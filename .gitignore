@@ -1,3 +1,5 @@
 .DS_Store
 bin/
 .shed-dev/
+tmp/air/
+air-build.log

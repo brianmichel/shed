@@ -22,7 +22,11 @@ description = "Run shed in client mode; pass args after --"
 run = "go run ./cmd/shed client"
 
 [tasks."run:dev"]
-description = "Run production-faithful local dev mode"
+description = "Run production-faithful local dev mode with Air hot reload"
+run = "go run github.com/air-verse/air@v1.62.0 -c .air.toml"
+
+[tasks."run:dev:once"]
+description = "Run production-faithful local dev mode without hot reload"
 run = "go run ./cmd/shed dev"
 
 [tasks."ui:check"]
