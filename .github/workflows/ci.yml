@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: Go
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.4'
+          cache: true
+
+      - name: Verify formatting
+        run: |
+          gofmt -w cmd internal
+          git diff --exit-code -- cmd internal
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        run: go build -o bin/shed ./cmd/shed
+
+      - name: Verify embedded UI
+        run: |
+          test -f internal/ui/dist/index.html
+          go test ./internal/ui
