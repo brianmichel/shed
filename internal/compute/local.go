@@ -64,7 +64,7 @@ func (a *LocalCompute) Allocate(ctx context.Context, req AllocateRequest) (Alloc
 	}
 
 	runCtx, cancel := context.WithCancel(a.ctx)
-	cli, err := client.New(client.Config{ServerURL: req.ConnectURL, SessionKey: req.SessionKey, SessionID: req.SessionID, SandboxID: req.SandboxID, WorkspaceRoot: abs, HeartbeatEvery: a.cfg.HeartbeatEvery})
+	cli, err := client.New(client.Config{ServerURL: req.ConnectURL, AgentToken: req.AgentToken, SessionID: req.SessionID, SandboxID: req.SandboxID, WorkspaceRoot: abs, HeartbeatEvery: a.cfg.HeartbeatEvery})
 	if err != nil {
 		cancel()
 		return AllocateResponse{}, err

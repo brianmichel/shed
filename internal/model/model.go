@@ -61,8 +61,8 @@ type Sandbox struct {
 
 type ClientSession struct {
 	SessionID         string            `json:"session_id"`
-	SessionKey        string            `json:"session_key,omitempty"`
-	SessionKeyHash    string            `json:"-"`
+	AgentToken        string            `json:"agent_token,omitempty"`
+	AgentTokenHash    string            `json:"-"`
 	SandboxID         string            `json:"sandbox_id"`
 	State             SessionState      `json:"state"`
 	Capabilities      map[string]bool   `json:"capabilities,omitempty"`
@@ -71,6 +71,17 @@ type ClientSession struct {
 	LastServerSeqSent int64             `json:"last_server_seq_sent"`
 	InsertedAt        time.Time         `json:"inserted_at"`
 	UpdatedAt         time.Time         `json:"updated_at"`
+}
+
+type APIToken struct {
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	TokenHash   string            `json:"-"`
+	TokenPrefix string            `json:"token_prefix"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	LastUsedAt  *time.Time        `json:"last_used_at,omitempty"`
+	InsertedAt  time.Time         `json:"inserted_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 type Command struct {

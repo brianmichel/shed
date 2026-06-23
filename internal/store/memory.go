@@ -18,6 +18,7 @@ var (
 	ErrSandboxNotFound = errors.New("sandbox_not_found")
 	ErrSessionNotFound = errors.New("session_not_found")
 	ErrInvalidSession  = errors.New("invalid_session")
+	ErrInvalidAPIToken = errors.New("invalid_api_token")
 	ErrCommandNotFound = errors.New("command_not_found")
 )
 
@@ -26,6 +27,7 @@ type MemoryStore struct {
 	sandboxes   map[string]model.Sandbox
 	sessions    map[string]model.ClientSession
 	commands    map[string]map[string]model.Command
+	apiTokens   map[string]model.APIToken
 	events      map[string][]model.Event
 	nextSeq     map[string]int64
 	idempotency map[string]string
@@ -36,6 +38,7 @@ func NewMemoryStore() *MemoryStore {
 		sandboxes:   map[string]model.Sandbox{},
 		sessions:    map[string]model.ClientSession{},
 		commands:    map[string]map[string]model.Command{},
+		apiTokens:   map[string]model.APIToken{},
 		events:      map[string][]model.Event{},
 		nextSeq:     map[string]int64{},
 		idempotency: map[string]string{},
@@ -58,11 +61,11 @@ func (s *MemoryStore) CreateSandbox(_ context.Context, in SandboxCreate) (model.
 	id := newID("sbx")
 	sb := model.Sandbox{ID: id, Environment: in.Environment, Template: in.Template, State: model.SandboxPendingClient, Compute: in.Compute, ComputeAPIVersion: in.ComputeAPIVersion, ComputeConfig: cloneStringMap(in.ComputeConfig), Metadata: cloneStringMap(in.Metadata), Capabilities: map[string]bool{"commands": true, "files": true, "pty": false}, Lease: model.Lease{TTLMillis: in.TTL.Milliseconds(), ExpiresAt: now.Add(in.TTL)}, InsertedAt: now, UpdatedAt: now}
 	key := newID("seedkey")
-	sess := model.ClientSession{SessionID: newID("sess"), SessionKeyHash: tokenHash(key), SandboxID: id, State: model.SessionIssued, InsertedAt: now, UpdatedAt: now}
+	sess := model.ClientSession{SessionID: newID("sess"), AgentTokenHash: tokenHash(key), SandboxID: id, State: model.SessionIssued, InsertedAt: now, UpdatedAt: now}
 	s.sandboxes[id] = sb
 	s.sessions[sess.SessionID] = sess
 	s.appendEventLocked(id, "", "server.store", "sandbox.pending_client", map[string]any{"state": string(sb.State)})
-	sess.SessionKey = key
+	sess.AgentToken = key
 	return sb, sess, nil
 }
 
@@ -146,11 +149,11 @@ func (s *MemoryStore) ExtendLease(_ context.Context, sandboxID string, ttl time.
 	return sb.Lease, nil
 }
 
-func (s *MemoryStore) AuthenticateSession(_ context.Context, sandboxID, sessionKey string) (model.ClientSession, error) {
+func (s *MemoryStore) AuthenticateSession(_ context.Context, sandboxID, agentToken string) (model.ClientSession, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sess := range s.sessions {
-		if sess.SandboxID == sandboxID && subtle.ConstantTimeCompare([]byte(sess.SessionKeyHash), []byte(tokenHash(sessionKey))) == 1 {
+		if sess.SandboxID == sandboxID && subtle.ConstantTimeCompare([]byte(sess.AgentTokenHash), []byte(tokenHash(agentToken))) == 1 {
 			return sess, nil
 		}
 	}
@@ -185,13 +188,53 @@ func (s *MemoryStore) UpdateSession(_ context.Context, sess model.ClientSession)
 		return model.ClientSession{}, ErrSessionNotFound
 	}
 	current := s.sessions[sess.SessionID]
-	if sess.SessionKeyHash == "" {
-		sess.SessionKeyHash = current.SessionKeyHash
+	if sess.AgentTokenHash == "" {
+		sess.AgentTokenHash = current.AgentTokenHash
 	}
-	sess.SessionKey = ""
+	sess.AgentToken = ""
 	sess.UpdatedAt = time.Now().UTC()
 	s.sessions[sess.SessionID] = sess
 	return sess, nil
+}
+
+func (s *MemoryStore) CreateAPIToken(_ context.Context, in APITokenCreate) (APITokenCreateResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	secret := newID("shd")
+	if in.Name == "" {
+		in.Name = "api-token"
+	}
+	tok := model.APIToken{ID: newID("atok"), Name: in.Name, TokenHash: tokenHash(secret), TokenPrefix: tokenPrefix(secret), Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	s.apiTokens[tok.ID] = tok
+	return APITokenCreateResult{Token: tok, Secret: secret}, nil
+}
+
+func (s *MemoryStore) ListAPITokens(_ context.Context) ([]model.APIToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.APIToken, 0, len(s.apiTokens))
+	for _, tok := range s.apiTokens {
+		out = append(out, tok)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InsertedAt.After(out[j].InsertedAt) })
+	return out, nil
+}
+
+func (s *MemoryStore) AuthenticateAPIToken(_ context.Context, token string) (model.APIToken, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	hash := tokenHash(token)
+	for _, tok := range s.apiTokens {
+		if subtle.ConstantTimeCompare([]byte(tok.TokenHash), []byte(hash)) == 1 {
+			now := time.Now().UTC()
+			tok.LastUsedAt = &now
+			tok.UpdatedAt = now
+			s.apiTokens[tok.ID] = tok
+			return tok, nil
+		}
+	}
+	return model.APIToken{}, ErrInvalidAPIToken
 }
 
 func (s *MemoryStore) CreateCommand(_ context.Context, sandboxID string, in CommandCreate) (model.Command, error) {
@@ -333,4 +376,11 @@ func newID(prefix string) string {
 func tokenHash(token string) string {
 	sum := sha256.Sum256([]byte(token))
 	return hex.EncodeToString(sum[:])
+}
+
+func tokenPrefix(token string) string {
+	if len(token) <= 12 {
+		return token
+	}
+	return token[:12]
 }

@@ -59,7 +59,7 @@ func (myDriver) Info(context.Context) (shedcompute.PluginInfo, error) {
 
 func (myDriver) Allocate(ctx context.Context, req shedcompute.AllocateRequest) (shedcompute.AllocateResponse, error) {
     // Create compute and start/provision shed client with req.ConnectURL,
-    // req.SessionKey as the agent token, and req.SandboxID.
+    // req.AgentToken, and req.SandboxID.
     return shedcompute.AllocateResponse{
         ExternalID:    "provider-allocation-id",
         APIVersion:    shedcompute.APIVersionV1,

@@ -22,7 +22,7 @@ import (
 
 type Config struct {
 	ServerURL      string
-	SessionKey     string
+	AgentToken     string
 	SessionID      string
 	SandboxID      string
 	WorkspaceRoot  string
@@ -49,8 +49,8 @@ func New(cfg Config) (*Client, error) {
 	if cfg.HeartbeatEvery == 0 {
 		cfg.HeartbeatEvery = 10 * time.Second
 	}
-	if cfg.SessionKey == "" || cfg.SessionID == "" || cfg.SandboxID == "" {
-		return nil, fmt.Errorf("session-key, session-id, and sandbox-id are required")
+	if cfg.AgentToken == "" || cfg.SessionID == "" || cfg.SandboxID == "" {
+		return nil, fmt.Errorf("agent-token, session-id, and sandbox-id are required")
 	}
 	return &Client{cfg: cfg, runners: map[string]*Runner{}}, nil
 }
@@ -64,7 +64,7 @@ func (c *Client) Run(ctx context.Context) error {
 	q.Set("sandbox_id", c.cfg.SandboxID)
 	u.RawQuery = q.Encode()
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+c.cfg.SessionKey)
+	header.Set("Authorization", "Bearer "+c.cfg.AgentToken)
 	ws, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return err

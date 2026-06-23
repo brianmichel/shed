@@ -36,7 +36,7 @@ type AllocateRequest struct {
 	ComputeDriver  string            `json:"compute_driver"`
 	SandboxID      string            `json:"sandbox_id"`
 	SessionID      string            `json:"session_id"`
-	SessionKey     string            `json:"session_key"`
+	AgentToken     string            `json:"agent_token"`
 	ConnectURL     string            `json:"connect_url"`
 	Environment    string            `json:"environment"`
 	Template       string            `json:"template"`

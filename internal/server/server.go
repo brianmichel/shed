@@ -115,11 +115,15 @@ func (s *Server) requiresAPIAuth(r *http.Request) bool {
 }
 
 func (s *Server) authenticateAPI(r *http.Request) bool {
-	if s.cfg.APIToken == "" {
+	tok, ok := bearerToken(r)
+	if !ok {
 		return false
 	}
-	tok, ok := bearerToken(r)
-	return ok && subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.APIToken)) == 1
+	if s.cfg.APIToken != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.APIToken)) == 1 {
+		return true
+	}
+	_, err := s.store.AuthenticateAPIToken(r.Context(), tok)
+	return err == nil
 }
 
 func (s *Server) CreateSandbox(ctx context.Context, in store.SandboxCreate) (model.Sandbox, model.ClientSession, error) {
@@ -137,7 +141,7 @@ func (s *Server) createAndAllocateSandbox(ctx context.Context, in store.SandboxC
 	if err != nil {
 		return model.Sandbox{}, model.ClientSession{}, err
 	}
-	resp, err := s.allocMgr.Allocate(ctx, compute.AllocateRequest{APIVersion: in.ComputeAPIVersion, ComputeDriver: in.Compute, SandboxID: sb.ID, SessionID: sess.SessionID, SessionKey: sess.SessionKey, ConnectURL: s.ClientURL(), Environment: sb.Environment, Template: sb.Template, LeaseTTLMillis: sb.Lease.TTLMillis, LeaseExpiresAt: sb.Lease.ExpiresAt, Config: in.ComputeConfig, Metadata: in.Metadata})
+	resp, err := s.allocMgr.Allocate(ctx, compute.AllocateRequest{APIVersion: in.ComputeAPIVersion, ComputeDriver: in.Compute, SandboxID: sb.ID, SessionID: sess.SessionID, AgentToken: sess.AgentToken, ConnectURL: s.ClientURL(), Environment: sb.Environment, Template: sb.Template, LeaseTTLMillis: sb.Lease.TTLMillis, LeaseExpiresAt: sb.Lease.ExpiresAt, Config: in.ComputeConfig, Metadata: in.Metadata})
 	if err != nil {
 		_, _ = s.store.UpdateSandboxState(ctx, sb.ID, model.SandboxFailed)
 		return sb, sess, err
@@ -181,6 +185,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/health", func(w http.ResponseWriter, r *http.Request) {
 		api.WriteJSON(w, 200, map[string]any{"status": "ok", "time": time.Now().UTC()})
 	})
+	s.mux.HandleFunc("GET /v1/api-tokens", s.listAPITokens)
+	s.mux.HandleFunc("POST /v1/api-tokens", s.createAPIToken)
 	s.mux.HandleFunc("GET /v1/compute/drivers", s.listComputeDrivers)
 	s.mux.HandleFunc("GET /v1/sandboxes", s.listSandboxes)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.createSandbox)
@@ -207,6 +213,29 @@ func (s *Server) routes() {
 		}
 		http.NotFound(w, r)
 	})
+}
+
+func (s *Server) listAPITokens(w http.ResponseWriter, r *http.Request) {
+	tokens, err := s.store.ListAPITokens(r.Context())
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": tokens})
+}
+
+func (s *Server) createAPIToken(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name     string            `json:"name"`
+		Metadata map[string]string `json:"metadata"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	result, err := s.store.CreateAPIToken(r.Context(), store.APITokenCreate{Name: in.Name, Metadata: in.Metadata})
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": result.Token, "api_token": result.Secret})
 }
 
 func (s *Server) listComputeDrivers(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +265,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusBadGateway, "allocation_failed", err.Error(), true)
 		return
 	}
-	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": redactSandbox(sb), "client_session": redactSession(sess), "agent_token": sess.SessionKey, "connect_url": s.ClientURL()})
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": redactSandbox(sb), "client_session": redactSession(sess), "agent_token": sess.AgentToken, "connect_url": s.ClientURL()})
 }
 func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
 	xs, err := s.store.ListSandboxes(r.Context())
@@ -540,7 +569,7 @@ func bearerToken(r *http.Request) (string, bool) {
 }
 
 func redactSession(sess model.ClientSession) model.ClientSession {
-	sess.SessionKey = ""
+	sess.AgentToken = ""
 	return sess
 }
 

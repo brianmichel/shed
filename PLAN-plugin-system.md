@@ -15,7 +15,7 @@ Use a HashiCorp/Nomad-style **external plugin process over RPC** model rather th
 
 Treat sandbox creation as two phases:
 1. **Persist intent and issue credentials** via `store.CreateSandbox`, producing the canonical `model.Sandbox` and `model.ClientSession`.
-2. **Delegate allocation lifecycle** to the selected compute plugin. The plugin receives `sandbox_id`, `session_id`, `session_key`, `connect_url`, lease information, template/environment, and plugin-specific config so it can create local/remote compute, prepare a workspace, start/provision `shed client`, perform health checks, renew/interpret lease policy, and clean up on release.
+2. **Delegate allocation lifecycle** to the selected compute plugin. The plugin receives `sandbox_id`, `session_id`, `agent_token`, `connect_url`, lease information, template/environment, and plugin-specific config so it can create local/remote compute, prepare a workspace, start/provision `shed client`, perform health checks, renew/interpret lease policy, and clean up on release.
 
 Core design points:
 - Add a small versioned compute API with explicit protocol and capability negotiation. The first stable contract should be `compute.v1`; future versions can coexist.

@@ -169,6 +169,11 @@ func (m *Manager) Allocate(ctx context.Context, req AllocateRequest) (AllocateRe
 	if req.APIVersion == "" {
 		req.APIVersion = APIVersionV1
 	}
+	if req.AgentToken == "" {
+		err := fmt.Errorf("agent_token is required")
+		m.emit(ctx, req.SandboxID, "compute.allocate.failed", map[string]any{"compute": name, "error": err.Error()})
+		return AllocateResponse{}, err
+	}
 	m.emit(ctx, req.SandboxID, "compute.allocate.started", map[string]any{"compute": name, "api_version": req.APIVersion})
 	start := time.Now()
 	alloc, info, err := m.resolve(ctx, name, req.APIVersion)

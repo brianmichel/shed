@@ -75,7 +75,7 @@ func runServer(ctx context.Context, args []string) error {
 func runClient(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("client", flag.ExitOnError)
 	serverURL := fs.String("server", envOr("SHED_SERVER_URL", "ws://127.0.0.1:6464/v1/client/connect"), "server websocket URL")
-	sessionKey := fs.String("session-key", envOr("SHED_SESSION_KEY", ""), "client session key")
+	agentToken := fs.String("agent-token", envOr("SHED_AGENT_TOKEN", ""), "client agent token")
 	sessionID := fs.String("session-id", envOr("SHED_SESSION_ID", ""), "client session id")
 	sandboxID := fs.String("sandbox-id", envOr("SHED_SANDBOX_ID", ""), "sandbox id")
 	workspace := fs.String("workspace-root", envOr("SHED_WORKSPACE_ROOT", "/tmp"), "workspace root")
@@ -83,7 +83,7 @@ func runClient(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	c, err := client.New(client.Config{ServerURL: *serverURL, SessionKey: *sessionKey, SessionID: *sessionID, SandboxID: *sandboxID, WorkspaceRoot: *workspace, HeartbeatEvery: 10 * time.Second})
+	c, err := client.New(client.Config{ServerURL: *serverURL, AgentToken: *agentToken, SessionID: *sessionID, SandboxID: *sandboxID, WorkspaceRoot: *workspace, HeartbeatEvery: 10 * time.Second})
 	if err != nil {
 		return err
 	}

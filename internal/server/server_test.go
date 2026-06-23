@@ -36,8 +36,9 @@ func TestAPIRequiresBearerToken(t *testing.T) {
 func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()
+	capture := &captureAllocateCompute{}
 	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "exec"})
-	if err := mgr.RegisterBuiltin("exec", execCompute{}); err != nil {
+	if err := mgr.RegisterBuiltin("exec", capture); err != nil {
 		t.Fatal(err)
 	}
 	srv := New(Config{APIToken: "api-secret", ComputeManager: mgr, DefaultCompute: "exec"}, st)
@@ -59,8 +60,11 @@ func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
 	if body.AgentToken == "" {
 		t.Fatal("agent_token missing")
 	}
-	if body.ClientSession.SessionKey != "" {
-		t.Fatalf("session key leaked in client_session: %#v", body.ClientSession)
+	if capture.agentToken != body.AgentToken {
+		t.Fatalf("compute saw agent token %q, response token %q", capture.agentToken, body.AgentToken)
+	}
+	if body.ClientSession.AgentToken != "" {
+		t.Fatalf("agent token leaked in client_session: %#v", body.ClientSession)
 	}
 	if body.Data.ComputeConfig != nil {
 		t.Fatalf("compute config leaked: %#v", body.Data.ComputeConfig)
@@ -69,8 +73,37 @@ func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sess.SessionKey != "" || sess.SessionKeyHash == "" {
+	if sess.AgentToken != "" || sess.AgentTokenHash == "" {
 		t.Fatalf("stored session should only retain hash: %#v", sess)
+	}
+}
+
+func TestCreateAPITokenCanAuthenticateAPI(t *testing.T) {
+	srv := New(Config{APIToken: "bootstrap"}, store.NewMemoryStore())
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/api-tokens", strings.NewReader(`{"name":"ci"}`))
+	createReq.Header.Set("Authorization", "Bearer bootstrap")
+	createW := httptest.NewRecorder()
+	srv.ServeHTTP(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", createW.Code, createW.Body.String())
+	}
+	var created struct {
+		Data     model.APIToken `json:"data"`
+		APIToken string         `json:"api_token"`
+	}
+	if err := json.NewDecoder(createW.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.APIToken == "" || created.Data.TokenHash != "" || created.Data.TokenPrefix == "" {
+		t.Fatalf("created token response=%#v", created)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/api-tokens", nil)
+	listReq.Header.Set("Authorization", "Bearer "+created.APIToken)
+	listW := httptest.NewRecorder()
+	srv.ServeHTTP(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", listW.Code, listW.Body.String())
 	}
 }
 
@@ -90,7 +123,7 @@ func TestClientConnectRequiresBearerSessionToken(t *testing.T) {
 	defer httpSrv.Close()
 	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/v1/client/connect?sandbox_id=" + sb.ID
 
-	_, resp, err := websocket.DefaultDialer.Dial(wsURL+"&session_key="+sess.SessionKey, nil)
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL+"&agent_token="+sess.AgentToken, nil)
 	if err == nil {
 		t.Fatal("expected missing header auth to fail")
 	}
@@ -99,7 +132,7 @@ func TestClientConnectRequiresBearerSessionToken(t *testing.T) {
 	}
 
 	header := http.Header{}
-	header.Set("Authorization", "Bearer "+sess.SessionKey)
+	header.Set("Authorization", "Bearer "+sess.AgentToken)
 	ws, _, err := websocket.DefaultDialer.Dial(wsURL, header)
 	if err != nil {
 		t.Fatal(err)
@@ -285,4 +318,37 @@ func (execCompute) Cancel(context.Context, compute.ExecSignalRequest) (compute.E
 }
 func (execCompute) Kill(context.Context, compute.ExecSignalRequest) (compute.ExecControlResponse, error) {
 	return compute.ExecControlResponse{Accepted: true}, nil
+}
+
+type captureAllocateCompute struct {
+	agentToken string
+}
+
+func (c *captureAllocateCompute) Info(context.Context) (compute.PluginInfo, error) {
+	return execCompute{}.Info(context.Background())
+}
+func (c *captureAllocateCompute) Allocate(_ context.Context, req compute.AllocateRequest) (compute.AllocateResponse, error) {
+	c.agentToken = req.AgentToken
+	return execCompute{}.Allocate(context.Background(), req)
+}
+func (c *captureAllocateCompute) Status(ctx context.Context, req compute.StatusRequest) (compute.StatusResponse, error) {
+	return execCompute{}.Status(ctx, req)
+}
+func (c *captureAllocateCompute) Renew(ctx context.Context, req compute.RenewRequest) (compute.RenewResponse, error) {
+	return execCompute{}.Renew(ctx, req)
+}
+func (c *captureAllocateCompute) Release(ctx context.Context, req compute.ReleaseRequest) (compute.ReleaseResponse, error) {
+	return execCompute{}.Release(ctx, req)
+}
+func (c *captureAllocateCompute) Exec(ctx context.Context, req compute.ExecRequest, sink compute.ExecEventSink) error {
+	return execCompute{}.Exec(ctx, req, sink)
+}
+func (c *captureAllocateCompute) Stdin(ctx context.Context, req compute.ExecStdinRequest) (compute.ExecControlResponse, error) {
+	return execCompute{}.Stdin(ctx, req)
+}
+func (c *captureAllocateCompute) Cancel(ctx context.Context, req compute.ExecSignalRequest) (compute.ExecControlResponse, error) {
+	return execCompute{}.Cancel(ctx, req)
+}
+func (c *captureAllocateCompute) Kill(ctx context.Context, req compute.ExecSignalRequest) (compute.ExecControlResponse, error) {
+	return execCompute{}.Kill(ctx, req)
 }
