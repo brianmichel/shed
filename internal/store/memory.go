@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"sort"
@@ -55,10 +57,12 @@ func (s *MemoryStore) CreateSandbox(_ context.Context, in SandboxCreate) (model.
 	}
 	id := newID("sbx")
 	sb := model.Sandbox{ID: id, Environment: in.Environment, Template: in.Template, State: model.SandboxPendingClient, Compute: in.Compute, ComputeAPIVersion: in.ComputeAPIVersion, ComputeConfig: cloneStringMap(in.ComputeConfig), Metadata: cloneStringMap(in.Metadata), Capabilities: map[string]bool{"commands": true, "files": true, "pty": false}, Lease: model.Lease{TTLMillis: in.TTL.Milliseconds(), ExpiresAt: now.Add(in.TTL)}, InsertedAt: now, UpdatedAt: now}
-	sess := model.ClientSession{SessionID: newID("sess"), SessionKey: newID("seedkey"), SandboxID: id, State: model.SessionIssued, InsertedAt: now, UpdatedAt: now}
+	key := newID("seedkey")
+	sess := model.ClientSession{SessionID: newID("sess"), SessionKeyHash: tokenHash(key), SandboxID: id, State: model.SessionIssued, InsertedAt: now, UpdatedAt: now}
 	s.sandboxes[id] = sb
 	s.sessions[sess.SessionID] = sess
 	s.appendEventLocked(id, "", "server.store", "sandbox.pending_client", map[string]any{"state": string(sb.State)})
+	sess.SessionKey = key
 	return sb, sess, nil
 }
 
@@ -146,7 +150,7 @@ func (s *MemoryStore) AuthenticateSession(_ context.Context, sandboxID, sessionK
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, sess := range s.sessions {
-		if sess.SandboxID == sandboxID && sess.SessionKey == sessionKey {
+		if sess.SandboxID == sandboxID && subtle.ConstantTimeCompare([]byte(sess.SessionKeyHash), []byte(tokenHash(sessionKey))) == 1 {
 			return sess, nil
 		}
 	}
@@ -180,6 +184,11 @@ func (s *MemoryStore) UpdateSession(_ context.Context, sess model.ClientSession)
 	if _, ok := s.sessions[sess.SessionID]; !ok {
 		return model.ClientSession{}, ErrSessionNotFound
 	}
+	current := s.sessions[sess.SessionID]
+	if sess.SessionKeyHash == "" {
+		sess.SessionKeyHash = current.SessionKeyHash
+	}
+	sess.SessionKey = ""
 	sess.UpdatedAt = time.Now().UTC()
 	s.sessions[sess.SessionID] = sess
 	return sess, nil
@@ -319,4 +328,9 @@ func newID(prefix string) string {
 	b := make([]byte, 6)
 	_, _ = rand.Read(b)
 	return prefix + "_" + hex.EncodeToString(b)
+}
+
+func tokenHash(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }

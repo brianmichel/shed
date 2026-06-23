@@ -62,6 +62,7 @@ type Sandbox struct {
 type ClientSession struct {
 	SessionID         string            `json:"session_id"`
 	SessionKey        string            `json:"session_key,omitempty"`
+	SessionKeyHash    string            `json:"-"`
 	SandboxID         string            `json:"sandbox_id"`
 	State             SessionState      `json:"state"`
 	Capabilities      map[string]bool   `json:"capabilities,omitempty"`

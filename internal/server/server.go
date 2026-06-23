@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -27,6 +29,7 @@ type Config struct {
 	UIEnabled      bool
 	ComputeManager *compute.Manager
 	DefaultCompute string
+	APIToken       string
 }
 
 type Server struct {
@@ -62,7 +65,7 @@ func New(cfg Config, st store.Store) *Server {
 	if allocMgr == nil {
 		allocMgr = compute.NewManager(compute.ManagerConfig{DefaultCompute: cfg.DefaultCompute})
 	}
-	s := &Server{cfg: cfg, store: st, mux: http.NewServeMux(), clients: map[string]*clientConn{}, allocMgr: allocMgr, upgrader: websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}}
+	s := &Server{cfg: cfg, store: st, mux: http.NewServeMux(), clients: map[string]*clientConn{}, allocMgr: allocMgr, upgrader: websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return r.Header.Get("Origin") == "" }}}
 	allocMgr.SetEventSink(func(ctx context.Context, sandboxID, eventType string, data map[string]any) {
 		_, _ = s.store.AppendEvent(ctx, sandboxID, "", "server.compute", eventType, data)
 	})
@@ -85,7 +88,7 @@ func (s *Server) Start(ctx context.Context) error {
 		return err
 	}
 	s.listener = ln
-	s.http = &http.Server{Handler: s.mux, ReadHeaderTimeout: 5 * time.Second}
+	s.http = &http.Server{Handler: s, ReadHeaderTimeout: 5 * time.Second}
 	go func() { <-ctx.Done(); _ = s.http.Shutdown(context.Background()); _ = s.allocMgr.Close() }()
 	go s.leaseSweeper(ctx)
 	log.Printf("[server] listening on http://%s", ln.Addr())
@@ -94,6 +97,29 @@ func (s *Server) Start(ctx context.Context) error {
 		return nil
 	}
 	return err
+}
+
+func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if s.requiresAPIAuth(r) && !s.authenticateAPI(r) {
+		api.WriteError(w, http.StatusUnauthorized, "unauthorized", "Missing or invalid API token", false)
+		return
+	}
+	s.mux.ServeHTTP(w, r)
+}
+
+func (s *Server) requiresAPIAuth(r *http.Request) bool {
+	if r.URL.Path == "/v1/health" || r.URL.Path == "/v1/client/connect" {
+		return false
+	}
+	return strings.HasPrefix(r.URL.Path, "/v1/")
+}
+
+func (s *Server) authenticateAPI(r *http.Request) bool {
+	if s.cfg.APIToken == "" {
+		return false
+	}
+	tok, ok := bearerToken(r)
+	return ok && subtle.ConstantTimeCompare([]byte(tok), []byte(s.cfg.APIToken)) == 1
 }
 
 func (s *Server) CreateSandbox(ctx context.Context, in store.SandboxCreate) (model.Sandbox, model.ClientSession, error) {
@@ -210,7 +236,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, http.StatusBadGateway, "allocation_failed", err.Error(), true)
 		return
 	}
-	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": sb, "client_session": sess, "connect_url": s.ClientURL()})
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": redactSandbox(sb), "client_session": redactSession(sess), "agent_token": sess.SessionKey, "connect_url": s.ClientURL()})
 }
 func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
 	xs, err := s.store.ListSandboxes(r.Context())
@@ -218,7 +244,7 @@ func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	api.WriteJSON(w, 200, map[string]any{"data": xs})
+	api.WriteJSON(w, 200, map[string]any{"data": redactSandboxes(xs)})
 }
 func (s *Server) getSandbox(w http.ResponseWriter, r *http.Request) {
 	sb, err := s.store.GetSandbox(r.Context(), r.PathValue("sandbox_id"))
@@ -229,7 +255,7 @@ func (s *Server) getSandbox(w http.ResponseWriter, r *http.Request) {
 	if sb.State != model.SandboxReleased && sb.State != model.SandboxFailed {
 		_, _ = s.allocMgr.Status(r.Context(), sb.Compute, compute.StatusRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, Config: sb.ComputeConfig})
 	}
-	api.WriteJSON(w, 200, map[string]any{"data": sb})
+	api.WriteJSON(w, 200, map[string]any{"data": redactSandbox(sb)})
 }
 func (s *Server) releaseSandbox(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("sandbox_id")
@@ -249,7 +275,7 @@ func (s *Server) releaseSandbox(w http.ResponseWriter, r *http.Request) {
 		writeStoreErr(w, err)
 		return
 	}
-	api.WriteJSON(w, 200, map[string]any{"data": sb})
+	api.WriteJSON(w, 200, map[string]any{"data": redactSandbox(sb)})
 }
 func (s *Server) extendLease(w http.ResponseWriter, r *http.Request) {
 	var in struct {
@@ -479,7 +505,12 @@ func (s *Server) dispatchCommandControl(w http.ResponseWriter, r *http.Request, 
 }
 
 func (s *Server) clientConnect(w http.ResponseWriter, r *http.Request) {
-	sandboxID, key := r.URL.Query().Get("sandbox_id"), r.URL.Query().Get("session_key")
+	sandboxID := r.URL.Query().Get("sandbox_id")
+	key, ok := bearerToken(r)
+	if !ok {
+		api.WriteError(w, 401, "invalid_session", "Invalid client session", false)
+		return
+	}
 	sess, err := s.store.AuthenticateSession(r.Context(), sandboxID, key)
 	if err != nil {
 		api.WriteError(w, 401, "invalid_session", "Invalid client session", false)
@@ -497,6 +528,33 @@ func (s *Server) clientConnect(w http.ResponseWriter, r *http.Request) {
 	_, _ = s.store.UpdateSession(context.Background(), sess)
 	_, _ = s.store.AppendEvent(context.Background(), sandboxID, "", "server.api", "client.connected", map[string]any{"session_id": sess.SessionID})
 	go s.readClient(cc)
+}
+
+func bearerToken(r *http.Request) (string, bool) {
+	value := r.Header.Get("Authorization")
+	scheme, token, ok := strings.Cut(value, " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(token), true
+}
+
+func redactSession(sess model.ClientSession) model.ClientSession {
+	sess.SessionKey = ""
+	return sess
+}
+
+func redactSandbox(sb model.Sandbox) model.Sandbox {
+	sb.ComputeConfig = nil
+	return sb
+}
+
+func redactSandboxes(in []model.Sandbox) []model.Sandbox {
+	out := make([]model.Sandbox, len(in))
+	for i, sb := range in {
+		out[i] = redactSandbox(sb)
+	}
+	return out
 }
 
 func (s *Server) readClient(cc *clientConn) {

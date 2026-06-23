@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -60,17 +61,18 @@ func (c *Client) Run(ctx context.Context) error {
 		return err
 	}
 	q := u.Query()
-	q.Set("session_key", c.cfg.SessionKey)
 	q.Set("sandbox_id", c.cfg.SandboxID)
 	u.RawQuery = q.Encode()
-	ws, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+c.cfg.SessionKey)
+	ws, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return err
 	}
 	c.ws = ws
 	defer ws.Close()
 	log.Printf("[client] connected sandbox_id=%s session_id=%s workspace=%s", c.cfg.SandboxID, c.cfg.SessionID, c.cfg.WorkspaceRoot)
-	if err := c.send("seed.hello", map[string]any{"seed_version": "0.1.0", "protocol_version": protocol.Version, "platform": runtime.GOOS, "arch": runtime.GOARCH, "session_key": c.cfg.SessionKey}); err != nil {
+	if err := c.send("seed.hello", map[string]any{"seed_version": "0.1.0", "protocol_version": protocol.Version, "platform": runtime.GOOS, "arch": runtime.GOARCH}); err != nil {
 		return err
 	}
 	go c.heartbeat(ctx)

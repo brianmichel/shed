@@ -7,7 +7,7 @@ Shed compute plugins are responsible for turning a logical sandbox record into u
 1. `POST /v1/sandboxes` creates a sandbox record and client session in the store.
 2. Shed calls the selected compute driver's `Allocate` method with:
    - sandbox/session IDs
-   - the session key
+   - a one-time agent token
    - the client WebSocket `connect_url`
    - environment/template fields
    - lease expiry/TTL
@@ -59,7 +59,7 @@ func (myDriver) Info(context.Context) (shedcompute.PluginInfo, error) {
 
 func (myDriver) Allocate(ctx context.Context, req shedcompute.AllocateRequest) (shedcompute.AllocateResponse, error) {
     // Create compute and start/provision shed client with req.ConnectURL,
-    // req.SessionID, req.SessionKey, and req.SandboxID.
+    // req.SessionKey as the agent token, and req.SandboxID.
     return shedcompute.AllocateResponse{
         ExternalID:    "provider-allocation-id",
         APIVersion:    shedcompute.APIVersionV1,
@@ -121,6 +121,7 @@ Compute plugins are treated as untrusted:
 
 - Shed launches plugins as child processes instead of loading code into the server process.
 - Plugins receive a restricted environment, not the full host environment.
+- Plugin environment values are not returned by Shed API driver listings; only configured key names are exposed.
 - Shed invokes plugins directly without shell interpolation.
 - Startup and per-call timeouts bound plugin hangs.
 - The manager kills plugin processes when Shed shuts down.

@@ -7,13 +7,105 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/brianmichel/shed/internal/compute"
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/store"
+	"github.com/gorilla/websocket"
 )
+
+func TestAPIRequiresBearerToken(t *testing.T) {
+	srv := New(Config{APIToken: "api-secret"}, store.NewMemoryStore())
+
+	unauthorized := httptest.NewRecorder()
+	srv.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/sandboxes", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	health := httptest.NewRecorder()
+	srv.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/v1/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", health.Code, health.Body.String())
+	}
+}
+
+func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "exec"})
+	if err := mgr.RegisterBuiltin("exec", execCompute{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{APIToken: "api-secret", ComputeManager: mgr, DefaultCompute: "exec"}, st)
+	req := httptest.NewRequest(http.MethodPost, "/v1/sandboxes", strings.NewReader(`{"compute_driver":"exec","compute_config":{"provider_token":"secret"}}`))
+	req.Header.Set("Authorization", "Bearer api-secret")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data          model.Sandbox       `json:"data"`
+		ClientSession model.ClientSession `json:"client_session"`
+		AgentToken    string              `json:"agent_token"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.AgentToken == "" {
+		t.Fatal("agent_token missing")
+	}
+	if body.ClientSession.SessionKey != "" {
+		t.Fatalf("session key leaked in client_session: %#v", body.ClientSession)
+	}
+	if body.Data.ComputeConfig != nil {
+		t.Fatalf("compute config leaked: %#v", body.Data.ComputeConfig)
+	}
+	sess, err := st.FindSessionBySandbox(ctx, body.Data.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.SessionKey != "" || sess.SessionKeyHash == "" {
+		t.Fatalf("stored session should only retain hash: %#v", sess)
+	}
+}
+
+func TestClientConnectRequiresBearerSessionToken(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "exec"})
+	if err := mgr.RegisterBuiltin("exec", execCompute{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{APIToken: "api-secret", ComputeManager: mgr, DefaultCompute: "exec"}, st)
+	sb, sess, err := srv.CreateSandbox(ctx, store.SandboxCreate{Compute: "exec", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpSrv := httptest.NewServer(srv)
+	defer httpSrv.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/v1/client/connect?sandbox_id=" + sb.ID
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL+"&session_key="+sess.SessionKey, nil)
+	if err == nil {
+		t.Fatal("expected missing header auth to fail")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("response=%#v err=%v", resp, err)
+	}
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+sess.SessionKey)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Close()
+}
 
 func TestListComputeDrivers(t *testing.T) {
 	ctx := context.Background()
@@ -23,7 +115,7 @@ func TestListComputeDrivers(t *testing.T) {
 	if err := mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: root})); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.RegisterExternal(compute.ExternalPluginConfig{Name: "cloud", Command: "/opt/shed/cloud-plugin", APIVersion: compute.APIVersionV1}); err != nil {
+	if err := mgr.RegisterExternal(compute.ExternalPluginConfig{Name: "cloud", Command: "/opt/shed/cloud-plugin", APIVersion: compute.APIVersionV1, Env: map[string]string{"PROVIDER_TOKEN": "secret"}}); err != nil {
 		t.Fatal(err)
 	}
 	srv := New(Config{Addr: "127.0.0.1:0", ComputeManager: mgr, DefaultCompute: "local"}, st)
@@ -42,6 +134,11 @@ func TestListComputeDrivers(t *testing.T) {
 	}
 	if body.DefaultDriver != "local" || len(body.Data) != 2 {
 		t.Fatalf("body=%#v", body)
+	}
+	for _, driver := range body.Data {
+		if driver.Name == "cloud" && (len(driver.EnvKeys) != 1 || driver.EnvKeys[0] != "PROVIDER_TOKEN") {
+			t.Fatalf("expected env key redaction, got %#v", driver)
+		}
 	}
 }
 

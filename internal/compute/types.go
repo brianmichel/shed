@@ -23,7 +23,7 @@ type DriverDescriptor struct {
 	Default    bool              `json:"default"`
 	Command    string            `json:"command,omitempty"`
 	Args       []string          `json:"args,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
+	EnvKeys    []string          `json:"env_keys,omitempty"`
 	APIVersion string            `json:"api_version,omitempty"`
 	Config     map[string]string `json:"config,omitempty"`
 	Plugin     *PluginInfo       `json:"plugin,omitempty"`

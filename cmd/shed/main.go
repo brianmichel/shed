@@ -51,6 +51,7 @@ func usage() { fmt.Fprintln(os.Stderr, "usage: shed <server|client|dev> [flags]"
 func runServer(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("server", flag.ExitOnError)
 	addr := fs.String("addr", envOr("SHED_ADDR", "127.0.0.1:6464"), "HTTP listen address")
+	apiToken := fs.String("api-token", envOr("SHED_API_TOKEN", ""), "required bearer token for customer-facing API requests")
 	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
 	defaultCompute := fs.String("compute-driver", envOr("SHED_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
 	workspace := fs.String("compute-workspace-root", envOr("SHED_COMPUTE_WORKSPACE", ".shed-server/workspace"), "workspace root for the built-in local compute")
@@ -61,11 +62,14 @@ func runServer(ctx context.Context, args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	if *apiToken == "" {
+		return fmt.Errorf("-api-token or SHED_API_TOKEN is required")
+	}
 	mgr, err := buildComputeManager(ctx, *defaultCompute, *workspace, plugins)
 	if err != nil {
 		return err
 	}
-	return server.New(server.Config{Addr: *addr, UIEnabled: *uiEnabled, ComputeManager: mgr, DefaultCompute: *defaultCompute}, store.NewMemoryStore()).Start(ctx)
+	return server.New(server.Config{Addr: *addr, UIEnabled: *uiEnabled, ComputeManager: mgr, DefaultCompute: *defaultCompute, APIToken: *apiToken}, store.NewMemoryStore()).Start(ctx)
 }
 
 func runClient(ctx context.Context, args []string) error {
@@ -89,6 +93,7 @@ func runClient(ctx context.Context, args []string) error {
 func runDev(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("dev", flag.ExitOnError)
 	addr := fs.String("addr", envOr("SHED_DEV_ADDR", "127.0.0.1:6464"), "HTTP listen address")
+	apiToken := fs.String("api-token", envOr("SHED_DEV_API_TOKEN", "shed-dev-token"), "bearer token for dev API requests")
 	workspace := fs.String("workspace-root", envOr("SHED_DEV_WORKSPACE", ".shed-dev/workspace"), "workspace root")
 	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
 	defaultCompute := fs.String("compute-driver", envOr("SHED_DEV_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
@@ -103,7 +108,7 @@ func runDev(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return dev.Run(ctx, dev.Config{Addr: *addr, WorkspaceRoot: *workspace, UIEnabled: *uiEnabled, DefaultCompute: *defaultCompute, ExternalComputes: externals})
+	return dev.Run(ctx, dev.Config{Addr: *addr, WorkspaceRoot: *workspace, UIEnabled: *uiEnabled, DefaultCompute: *defaultCompute, ExternalComputes: externals, APIToken: *apiToken})
 }
 
 type pluginConfigFlag []string

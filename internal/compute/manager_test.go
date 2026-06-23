@@ -46,7 +46,7 @@ func TestManagerListDrivers(t *testing.T) {
 		t.Fatalf("local config=%#v", local.Config)
 	}
 	external := byName["external"]
-	if external.Kind != "external" || external.Loaded || external.Command != "/bin/false" || external.Env["FOO"] != "bar" {
+	if external.Kind != "external" || external.Loaded || external.Command != "/bin/false" || len(external.EnvKeys) != 1 || external.EnvKeys[0] != "FOO" {
 		t.Fatalf("external=%#v", external)
 	}
 }

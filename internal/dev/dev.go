@@ -17,6 +17,7 @@ type Config struct {
 	UIEnabled           bool
 	DefaultCompute      string
 	ExternalComputes    []compute.ExternalPluginConfig
+	APIToken            string
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -34,6 +35,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if cfg.DefaultCompute == "" {
 		cfg.DefaultCompute = "local"
 	}
+	if cfg.APIToken == "" {
+		cfg.APIToken = "shed-dev-token"
+	}
 	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: cfg.DefaultCompute})
 	_ = mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: abs, HeartbeatEvery: 5 * time.Second}))
 	for _, ext := range cfg.ExternalComputes {
@@ -41,7 +45,7 @@ func Run(ctx context.Context, cfg Config) error {
 			return err
 		}
 	}
-	srv := server.New(server.Config{Addr: cfg.Addr, UIEnabled: cfg.UIEnabled, ComputeManager: mgr, DefaultCompute: cfg.DefaultCompute}, st)
+	srv := server.New(server.Config{Addr: cfg.Addr, UIEnabled: cfg.UIEnabled, ComputeManager: mgr, DefaultCompute: cfg.DefaultCompute, APIToken: cfg.APIToken}, st)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()
 	for i := 0; i < 100 && srv.Addr() == cfg.Addr; i++ {
@@ -53,6 +57,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	log.Printf("[dev] server: http://%s", srv.Addr())
 	log.Printf("[dev] ui:     http://%s/ui/", srv.Addr())
+	log.Printf("[dev] api auth: Authorization: Bearer %s", cfg.APIToken)
 	log.Printf("[dev] sandbox_id=%s session_id=%s workspace=%s", sb.ID, sess.SessionID, sb.ComputeMetadata["workspace_root"])
 	select {
 	case <-ctx.Done():
