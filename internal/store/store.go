@@ -34,6 +34,16 @@ type CommandCreate struct {
 	Metadata  map[string]string
 }
 
+type APITokenCreate struct {
+	Name     string
+	Metadata map[string]string
+}
+
+type APITokenCreateResult struct {
+	Token  model.APIToken
+	Secret string
+}
+
 type Store interface {
 	CreateSandbox(ctx context.Context, in SandboxCreate) (model.Sandbox, model.ClientSession, error)
 	ListSandboxes(ctx context.Context) ([]model.Sandbox, error)
@@ -42,10 +52,14 @@ type Store interface {
 	UpdateSandboxAllocation(ctx context.Context, sandboxID string, in SandboxAllocationUpdate) (model.Sandbox, error)
 	ExtendLease(ctx context.Context, sandboxID string, ttl time.Duration) (model.Lease, error)
 
-	AuthenticateSession(ctx context.Context, sandboxID, sessionKey string) (model.ClientSession, error)
+	AuthenticateSession(ctx context.Context, sandboxID, agentToken string) (model.ClientSession, error)
 	GetSession(ctx context.Context, sessionID string) (model.ClientSession, error)
 	FindSessionBySandbox(ctx context.Context, sandboxID string) (model.ClientSession, error)
 	UpdateSession(ctx context.Context, session model.ClientSession) (model.ClientSession, error)
+
+	CreateAPIToken(ctx context.Context, in APITokenCreate) (APITokenCreateResult, error)
+	ListAPITokens(ctx context.Context) ([]model.APIToken, error)
+	AuthenticateAPIToken(ctx context.Context, token string) (model.APIToken, error)
 
 	CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error)
 	ListCommands(ctx context.Context, sandboxID string) ([]model.Command, error)

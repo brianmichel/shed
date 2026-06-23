@@ -7,13 +7,138 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/brianmichel/shed/internal/compute"
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/store"
+	"github.com/gorilla/websocket"
 )
+
+func TestAPIRequiresBearerToken(t *testing.T) {
+	srv := New(Config{APIToken: "api-secret"}, store.NewMemoryStore())
+
+	unauthorized := httptest.NewRecorder()
+	srv.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/v1/sandboxes", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("status=%d body=%s", unauthorized.Code, unauthorized.Body.String())
+	}
+
+	health := httptest.NewRecorder()
+	srv.ServeHTTP(health, httptest.NewRequest(http.MethodGet, "/v1/health", nil))
+	if health.Code != http.StatusOK {
+		t.Fatalf("health status=%d body=%s", health.Code, health.Body.String())
+	}
+}
+
+func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	capture := &captureAllocateCompute{}
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "exec"})
+	if err := mgr.RegisterBuiltin("exec", capture); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{APIToken: "api-secret", ComputeManager: mgr, DefaultCompute: "exec"}, st)
+	req := httptest.NewRequest(http.MethodPost, "/v1/sandboxes", strings.NewReader(`{"compute_driver":"exec","compute_config":{"provider_token":"secret"}}`))
+	req.Header.Set("Authorization", "Bearer api-secret")
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data          model.Sandbox       `json:"data"`
+		ClientSession model.ClientSession `json:"client_session"`
+		AgentToken    string              `json:"agent_token"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.AgentToken == "" {
+		t.Fatal("agent_token missing")
+	}
+	if capture.agentToken != body.AgentToken {
+		t.Fatalf("compute saw agent token %q, response token %q", capture.agentToken, body.AgentToken)
+	}
+	if body.ClientSession.AgentToken != "" {
+		t.Fatalf("agent token leaked in client_session: %#v", body.ClientSession)
+	}
+	if body.Data.ComputeConfig != nil {
+		t.Fatalf("compute config leaked: %#v", body.Data.ComputeConfig)
+	}
+	sess, err := st.FindSessionBySandbox(ctx, body.Data.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.AgentToken != "" || sess.AgentTokenHash == "" {
+		t.Fatalf("stored session should only retain hash: %#v", sess)
+	}
+}
+
+func TestCreateAPITokenCanAuthenticateAPI(t *testing.T) {
+	srv := New(Config{APIToken: "bootstrap"}, store.NewMemoryStore())
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/api-tokens", strings.NewReader(`{"name":"ci"}`))
+	createReq.Header.Set("Authorization", "Bearer bootstrap")
+	createW := httptest.NewRecorder()
+	srv.ServeHTTP(createW, createReq)
+	if createW.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", createW.Code, createW.Body.String())
+	}
+	var created struct {
+		Data     model.APIToken `json:"data"`
+		APIToken string         `json:"api_token"`
+	}
+	if err := json.NewDecoder(createW.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.APIToken == "" || created.Data.TokenHash != "" || created.Data.TokenPrefix == "" {
+		t.Fatalf("created token response=%#v", created)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/api-tokens", nil)
+	listReq.Header.Set("Authorization", "Bearer "+created.APIToken)
+	listW := httptest.NewRecorder()
+	srv.ServeHTTP(listW, listReq)
+	if listW.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", listW.Code, listW.Body.String())
+	}
+}
+
+func TestClientConnectRequiresBearerSessionToken(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "exec"})
+	if err := mgr.RegisterBuiltin("exec", execCompute{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{APIToken: "api-secret", ComputeManager: mgr, DefaultCompute: "exec"}, st)
+	sb, sess, err := srv.CreateSandbox(ctx, store.SandboxCreate{Compute: "exec", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpSrv := httptest.NewServer(srv)
+	defer httpSrv.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http") + "/v1/client/connect?sandbox_id=" + sb.ID
+
+	_, resp, err := websocket.DefaultDialer.Dial(wsURL+"&agent_token="+sess.AgentToken, nil)
+	if err == nil {
+		t.Fatal("expected missing header auth to fail")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("response=%#v err=%v", resp, err)
+	}
+
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+sess.AgentToken)
+	ws, _, err := websocket.DefaultDialer.Dial(wsURL, header)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = ws.Close()
+}
 
 func TestListComputeDrivers(t *testing.T) {
 	ctx := context.Background()
@@ -23,7 +148,7 @@ func TestListComputeDrivers(t *testing.T) {
 	if err := mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: root})); err != nil {
 		t.Fatal(err)
 	}
-	if err := mgr.RegisterExternal(compute.ExternalPluginConfig{Name: "cloud", Command: "/opt/shed/cloud-plugin", APIVersion: compute.APIVersionV1}); err != nil {
+	if err := mgr.RegisterExternal(compute.ExternalPluginConfig{Name: "cloud", Command: "/opt/shed/cloud-plugin", APIVersion: compute.APIVersionV1, Env: map[string]string{"PROVIDER_TOKEN": "secret"}}); err != nil {
 		t.Fatal(err)
 	}
 	srv := New(Config{Addr: "127.0.0.1:0", ComputeManager: mgr, DefaultCompute: "local"}, st)
@@ -42,6 +167,11 @@ func TestListComputeDrivers(t *testing.T) {
 	}
 	if body.DefaultDriver != "local" || len(body.Data) != 2 {
 		t.Fatalf("body=%#v", body)
+	}
+	for _, driver := range body.Data {
+		if driver.Name == "cloud" && (len(driver.EnvKeys) != 1 || driver.EnvKeys[0] != "PROVIDER_TOKEN") {
+			t.Fatalf("expected env key redaction, got %#v", driver)
+		}
 	}
 }
 
@@ -188,4 +318,37 @@ func (execCompute) Cancel(context.Context, compute.ExecSignalRequest) (compute.E
 }
 func (execCompute) Kill(context.Context, compute.ExecSignalRequest) (compute.ExecControlResponse, error) {
 	return compute.ExecControlResponse{Accepted: true}, nil
+}
+
+type captureAllocateCompute struct {
+	agentToken string
+}
+
+func (c *captureAllocateCompute) Info(context.Context) (compute.PluginInfo, error) {
+	return execCompute{}.Info(context.Background())
+}
+func (c *captureAllocateCompute) Allocate(_ context.Context, req compute.AllocateRequest) (compute.AllocateResponse, error) {
+	c.agentToken = req.AgentToken
+	return execCompute{}.Allocate(context.Background(), req)
+}
+func (c *captureAllocateCompute) Status(ctx context.Context, req compute.StatusRequest) (compute.StatusResponse, error) {
+	return execCompute{}.Status(ctx, req)
+}
+func (c *captureAllocateCompute) Renew(ctx context.Context, req compute.RenewRequest) (compute.RenewResponse, error) {
+	return execCompute{}.Renew(ctx, req)
+}
+func (c *captureAllocateCompute) Release(ctx context.Context, req compute.ReleaseRequest) (compute.ReleaseResponse, error) {
+	return execCompute{}.Release(ctx, req)
+}
+func (c *captureAllocateCompute) Exec(ctx context.Context, req compute.ExecRequest, sink compute.ExecEventSink) error {
+	return execCompute{}.Exec(ctx, req, sink)
+}
+func (c *captureAllocateCompute) Stdin(ctx context.Context, req compute.ExecStdinRequest) (compute.ExecControlResponse, error) {
+	return execCompute{}.Stdin(ctx, req)
+}
+func (c *captureAllocateCompute) Cancel(ctx context.Context, req compute.ExecSignalRequest) (compute.ExecControlResponse, error) {
+	return execCompute{}.Cancel(ctx, req)
+}
+func (c *captureAllocateCompute) Kill(ctx context.Context, req compute.ExecSignalRequest) (compute.ExecControlResponse, error) {
+	return execCompute{}.Kill(ctx, req)
 }

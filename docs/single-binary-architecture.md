@@ -34,7 +34,7 @@ Runs inside the target compute environment. It assumes the VM/container/host alr
 
 Responsibilities:
 
-- Authenticate to a server using a session key, session ID, and sandbox/allocation ID.
+- Authenticate to a server using a bearer agent token and sandbox/allocation ID.
 - Register platform, hostname, process, workspace, and capabilities.
 - Heartbeat and reconnect/resume.
 - Execute commands and stream stdout/stderr/exit events.
@@ -71,9 +71,15 @@ pkg/compute           Public SDK aliases for external compute plugin authors
 
 ## Public API shape
 
+Customer-facing API requests authenticate with `Authorization: Bearer <api-token>`. `shed server` requires a bootstrap token from `-api-token` or `SHED_API_TOKEN`; `shed dev` defaults to `shed-dev-token` unless `-api-token` or `SHED_DEV_API_TOKEN` is provided. API tokens are created through `POST /v1/api-tokens` using an existing API token. Created tokens are returned once and stored hashed. `/v1/health` is intentionally unauthenticated.
+
+Sandbox creation returns a one-time `agent_token` for bootstrapping `shed client`. Normal sandbox/session responses redact the agent token and compute config values.
+
 Core endpoints:
 
 - `GET /v1/health`
+- `GET /v1/api-tokens`
+- `POST /v1/api-tokens` — issue a new customer-facing API token.
 - `GET /v1/compute/drivers` — list registered compute drivers, server-side configuration, and plugin metadata.
 - `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, and call the selected compute driver.
 - `GET /v1/sandboxes`
@@ -172,9 +178,11 @@ Future SQL stores should preserve:
 - transactional command/sandbox state updates with event append.
 - uniqueness for IDs and idempotency keys.
 - ordered event queries by `(sandbox_id, seq)` and `(sandbox_id, command_id, seq)`.
-- session key lookup without exposing raw keys in broad list operations.
+- agent token lookup without exposing raw tokens in broad list operations.
 
 ## Server/client protocol
+
+`shed client` connects to `/v1/client/connect?sandbox_id=...` and sends `Authorization: Bearer <agent-token>` in the WebSocket handshake. The token is scoped to the sandbox session, stored hashed by the server, and is not part of the protocol payload.
 
 The protocol envelope:
 

@@ -119,7 +119,7 @@ func (m *Manager) ListDrivers(ctx context.Context) []DriverDescriptor {
 		desc.Kind = "external"
 		desc.Command = ext.Command
 		desc.Args = append([]string(nil), ext.Args...)
-		desc.Env = ext.Env
+		desc.EnvKeys = sortedKeys(ext.Env)
 		desc.APIVersion = ext.APIVersion
 		if info, ok := loaded[name]; ok {
 			desc.Loaded = true
@@ -168,6 +168,11 @@ func (m *Manager) Allocate(ctx context.Context, req AllocateRequest) (AllocateRe
 	req.ComputeDriver = name
 	if req.APIVersion == "" {
 		req.APIVersion = APIVersionV1
+	}
+	if req.AgentToken == "" {
+		err := fmt.Errorf("agent_token is required")
+		m.emit(ctx, req.SandboxID, "compute.allocate.failed", map[string]any{"compute": name, "error": err.Error()})
+		return AllocateResponse{}, err
 	}
 	m.emit(ctx, req.SandboxID, "compute.allocate.started", map[string]any{"compute": name, "api_version": req.APIVersion})
 	start := time.Now()
@@ -467,5 +472,14 @@ func restrictedEnv(env map[string]string) []string {
 	for k, v := range env {
 		out = append(out, k+"="+v)
 	}
+	return out
+}
+
+func sortedKeys(in map[string]string) []string {
+	out := make([]string, 0, len(in))
+	for k := range in {
+		out = append(out, k)
+	}
+	sort.Strings(out)
 	return out
 }

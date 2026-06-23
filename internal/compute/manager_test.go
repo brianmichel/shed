@@ -46,7 +46,7 @@ func TestManagerListDrivers(t *testing.T) {
 		t.Fatalf("local config=%#v", local.Config)
 	}
 	external := byName["external"]
-	if external.Kind != "external" || external.Loaded || external.Command != "/bin/false" || external.Env["FOO"] != "bar" {
+	if external.Kind != "external" || external.Loaded || external.Command != "/bin/false" || len(external.EnvKeys) != 1 || external.EnvKeys[0] != "FOO" {
 		t.Fatalf("external=%#v", external)
 	}
 }
@@ -61,7 +61,7 @@ func TestManagerBuiltinLifecycle(t *testing.T) {
 	if err := mgr.RegisterBuiltin("test", fake); err != nil {
 		t.Fatal(err)
 	}
-	resp, err := mgr.Allocate(ctx, AllocateRequest{SandboxID: "sbx_1", SessionID: "sess_1", SessionKey: "key", ConnectURL: "ws://127.0.0.1/client"})
+	resp, err := mgr.Allocate(ctx, AllocateRequest{SandboxID: "sbx_1", SessionID: "sess_1", AgentToken: "key", ConnectURL: "ws://127.0.0.1/client"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +98,18 @@ func TestManagerBuiltinLifecycle(t *testing.T) {
 	}
 }
 
+func TestManagerAllocateRequiresAgentToken(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewManager(ManagerConfig{DefaultCompute: "test"})
+	if err := mgr.RegisterBuiltin("test", &fakeCompute{name: "builtin-test", version: "0.1.0", apiVersions: []string{APIVersionV1}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := mgr.Allocate(ctx, AllocateRequest{SandboxID: "sbx_1", SessionID: "sess_1", ConnectURL: "ws://127.0.0.1/client"})
+	if err == nil {
+		t.Fatal("expected missing agent_token error")
+	}
+}
+
 func TestManagerExternalPluginLifecycle(t *testing.T) {
 	ctx := context.Background()
 	mgr := NewManager(ManagerConfig{DefaultCompute: "external", StartupTimeout: 5 * time.Second, CallTimeout: 5 * time.Second})
@@ -105,7 +117,7 @@ func TestManagerExternalPluginLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mgr.Close()
-	resp, err := mgr.Allocate(ctx, AllocateRequest{SandboxID: "sbx_ext", SessionID: "sess", SessionKey: "key", ConnectURL: "ws://127.0.0.1/client"})
+	resp, err := mgr.Allocate(ctx, AllocateRequest{SandboxID: "sbx_ext", SessionID: "sess", AgentToken: "key", ConnectURL: "ws://127.0.0.1/client"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +146,7 @@ func TestManagerVersionMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer mgr.Close()
-	_, err := mgr.Allocate(ctx, AllocateRequest{APIVersion: APIVersionV1, SandboxID: "sbx_bad", SessionID: "sess", SessionKey: "key", ConnectURL: "ws://127.0.0.1/client"})
+	_, err := mgr.Allocate(ctx, AllocateRequest{APIVersion: APIVersionV1, SandboxID: "sbx_bad", SessionID: "sess", AgentToken: "key", ConnectURL: "ws://127.0.0.1/client"})
 	if err == nil {
 		t.Fatal("expected version mismatch")
 	}
@@ -145,7 +157,7 @@ func TestLocalComputeReleaseCleanup(t *testing.T) {
 	defer cancel()
 	root := t.TempDir()
 	alloc := NewLocalCompute(ctx, LocalConfig{WorkspaceRoot: root, HeartbeatEvery: time.Hour})
-	resp, err := alloc.Allocate(ctx, AllocateRequest{SandboxID: "sbx_local", SessionID: "sess", SessionKey: "key", ConnectURL: "ws://127.0.0.1:1/v1/client/connect"})
+	resp, err := alloc.Allocate(ctx, AllocateRequest{SandboxID: "sbx_local", SessionID: "sess", AgentToken: "key", ConnectURL: "ws://127.0.0.1:1/v1/client/connect"})
 	if err != nil {
 		t.Fatal(err)
 	}

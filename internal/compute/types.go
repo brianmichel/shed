@@ -23,7 +23,7 @@ type DriverDescriptor struct {
 	Default    bool              `json:"default"`
 	Command    string            `json:"command,omitempty"`
 	Args       []string          `json:"args,omitempty"`
-	Env        map[string]string `json:"env,omitempty"`
+	EnvKeys    []string          `json:"env_keys,omitempty"`
 	APIVersion string            `json:"api_version,omitempty"`
 	Config     map[string]string `json:"config,omitempty"`
 	Plugin     *PluginInfo       `json:"plugin,omitempty"`
@@ -36,7 +36,7 @@ type AllocateRequest struct {
 	ComputeDriver  string            `json:"compute_driver"`
 	SandboxID      string            `json:"sandbox_id"`
 	SessionID      string            `json:"session_id"`
-	SessionKey     string            `json:"session_key"`
+	AgentToken     string            `json:"agent_token"`
 	ConnectURL     string            `json:"connect_url"`
 	Environment    string            `json:"environment"`
 	Template       string            `json:"template"`

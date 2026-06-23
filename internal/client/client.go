@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,7 +22,7 @@ import (
 
 type Config struct {
 	ServerURL      string
-	SessionKey     string
+	AgentToken     string
 	SessionID      string
 	SandboxID      string
 	WorkspaceRoot  string
@@ -48,8 +49,8 @@ func New(cfg Config) (*Client, error) {
 	if cfg.HeartbeatEvery == 0 {
 		cfg.HeartbeatEvery = 10 * time.Second
 	}
-	if cfg.SessionKey == "" || cfg.SessionID == "" || cfg.SandboxID == "" {
-		return nil, fmt.Errorf("session-key, session-id, and sandbox-id are required")
+	if cfg.AgentToken == "" || cfg.SessionID == "" || cfg.SandboxID == "" {
+		return nil, fmt.Errorf("agent-token, session-id, and sandbox-id are required")
 	}
 	return &Client{cfg: cfg, runners: map[string]*Runner{}}, nil
 }
@@ -60,17 +61,18 @@ func (c *Client) Run(ctx context.Context) error {
 		return err
 	}
 	q := u.Query()
-	q.Set("session_key", c.cfg.SessionKey)
 	q.Set("sandbox_id", c.cfg.SandboxID)
 	u.RawQuery = q.Encode()
-	ws, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), nil)
+	header := http.Header{}
+	header.Set("Authorization", "Bearer "+c.cfg.AgentToken)
+	ws, _, err := websocket.DefaultDialer.DialContext(ctx, u.String(), header)
 	if err != nil {
 		return err
 	}
 	c.ws = ws
 	defer ws.Close()
 	log.Printf("[client] connected sandbox_id=%s session_id=%s workspace=%s", c.cfg.SandboxID, c.cfg.SessionID, c.cfg.WorkspaceRoot)
-	if err := c.send("seed.hello", map[string]any{"seed_version": "0.1.0", "protocol_version": protocol.Version, "platform": runtime.GOOS, "arch": runtime.GOARCH, "session_key": c.cfg.SessionKey}); err != nil {
+	if err := c.send("seed.hello", map[string]any{"seed_version": "0.1.0", "protocol_version": protocol.Version, "platform": runtime.GOOS, "arch": runtime.GOARCH}); err != nil {
 		return err
 	}
 	go c.heartbeat(ctx)

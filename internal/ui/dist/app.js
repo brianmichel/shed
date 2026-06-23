@@ -28,11 +28,31 @@ function startTabPolling(fn, everyMs) {
 /* ───────────────────────── fetch helpers ───────────────────────── */
 
 async function json(url, opts) {
-  const r = await fetch(url, opts);
+  opts = withAuth(opts || {});
+  let r = await fetch(url, opts);
+  if (r.status === 401 && setApiToken()) {
+    opts = withAuth(opts || {});
+    r = await fetch(url, opts);
+  }
   const ct = r.headers.get("content-type") || "";
   const body = ct.includes("application/json") ? await r.json() : { error: { message: await r.text() } };
   if (!r.ok) throw new Error(body.error?.message || r.statusText);
   return body;
+}
+
+function withAuth(opts) {
+  const token = localStorage.getItem("shed.apiToken") || "";
+  if (!token) return opts;
+  const headers = new Headers(opts.headers || {});
+  headers.set("Authorization", "Bearer " + token);
+  return { ...opts, headers };
+}
+
+function setApiToken() {
+  const token = prompt("Shed API token", localStorage.getItem("shed.apiToken") || "");
+  if (!token) return false;
+  localStorage.setItem("shed.apiToken", token);
+  return true;
 }
 
 /* ───────────────────────── theme ───────────────────────── */
