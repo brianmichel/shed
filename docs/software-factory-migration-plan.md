@@ -141,7 +141,7 @@ Acceptance criteria:
 | ID | State | Depends On | Task |
 |---|---|---|---|
 | `SF-040` | `DONE` | `SF-032` | Add durable scheduler package for AgentRun progression. |
-| `SF-041` | `NOT_STARTED` | `SF-040` | Implement run acquisition and locking to avoid duplicate workers. |
+| `SF-041` | `DONE` | `SF-040` | Implement run acquisition and locking to avoid duplicate workers. |
 | `SF-042` | `NOT_STARTED` | `SF-040` | Implement run timeout and cancellation handling. |
 | `SF-043` | `NOT_STARTED` | `SF-040` | Implement retry policy primitives. |
 | `SF-044` | `NOT_STARTED` | `SF-040` | Implement run step events. |

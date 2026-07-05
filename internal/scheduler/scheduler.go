@@ -62,7 +62,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 }
 
 func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
-	runs, err := s.store.ListAgentRuns(ctx, store.AgentRunListOptions{State: model.AgentRunQueued, Page: store.Page{Limit: s.cfg.BatchSize}})
+	runs, err := s.store.AcquireQueuedAgentRuns(ctx, s.cfg.BatchSize)
 	if err != nil {
 		return 0, err
 	}
@@ -83,9 +83,6 @@ func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
 
 func (s *Scheduler) processOne(ctx context.Context, run model.AgentRun) error {
 	if _, err := s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemRunning); err != nil {
-		return err
-	}
-	if _, err := s.store.UpdateAgentRunState(ctx, run.ID, model.AgentRunRunning); err != nil {
 		return err
 	}
 	if err := s.processor.ProcessAgentRun(ctx, run); err != nil {

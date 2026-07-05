@@ -117,6 +117,7 @@ type Store interface {
 	UpdateWorkItemState(ctx context.Context, workItemID string, state model.WorkItemState) (model.WorkItem, error)
 
 	CreateAgentRun(ctx context.Context, workItemID string, in AgentRunCreate) (model.AgentRun, error)
+	AcquireQueuedAgentRuns(ctx context.Context, limit int) ([]model.AgentRun, error)
 	ListAgentRuns(ctx context.Context, opts AgentRunListOptions) ([]model.AgentRun, error)
 	GetAgentRun(ctx context.Context, agentRunID string) (model.AgentRun, error)
 	UpdateAgentRunState(ctx context.Context, agentRunID string, state model.AgentRunState) (model.AgentRun, error)

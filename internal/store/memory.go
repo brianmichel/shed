@@ -316,6 +316,36 @@ func (s *MemoryStore) CreateAgentRun(_ context.Context, workItemID string, in Ag
 	return run, nil
 }
 
+func (s *MemoryStore) AcquireQueuedAgentRuns(_ context.Context, limit int) ([]model.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if limit <= 0 {
+		limit = 1
+	}
+	queued := make([]model.AgentRun, 0, len(s.agentRuns))
+	for _, run := range s.agentRuns {
+		if run.State == model.AgentRunQueued {
+			queued = append(queued, run)
+		}
+	}
+	sort.Slice(queued, func(i, j int) bool { return queued[i].InsertedAt.Before(queued[j].InsertedAt) })
+	if len(queued) > limit {
+		queued = queued[:limit]
+	}
+	now := time.Now().UTC()
+	for i, run := range queued {
+		run.State = model.AgentRunRunning
+		run.UpdatedAt = now
+		if run.StartedAt == nil {
+			run.StartedAt = &now
+		}
+		s.agentRuns[run.ID] = run
+		s.appendFactoryEventLocked(run.WorkItemID, run.ID, "server.store", "agent_run.running", map[string]any{"state": string(run.State)})
+		queued[i] = run
+	}
+	return queued, nil
+}
+
 func (s *MemoryStore) ListAgentRuns(_ context.Context, opts AgentRunListOptions) ([]model.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

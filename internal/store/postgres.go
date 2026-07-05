@@ -352,6 +352,50 @@ func (s *PostgresStore) CreateAgentRun(ctx context.Context, workItemID string, i
 	return run, err
 }
 
+func (s *PostgresStore) AcquireQueuedAgentRuns(ctx context.Context, limit int) ([]model.AgentRun, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	runs := []model.AgentRun{}
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `WITH picked AS (
+    SELECT id
+    FROM agent_runs
+    WHERE state = $1
+    ORDER BY inserted_at ASC
+    LIMIT $2
+    FOR UPDATE SKIP LOCKED
+)
+UPDATE agent_runs
+SET state = $3,
+    started_at = COALESCE(started_at, $4),
+    updated_at = $4
+WHERE id IN (SELECT id FROM picked)
+RETURNING id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`, model.AgentRunQueued, limit, model.AgentRunRunning, time.Now().UTC())
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			run, err := scanAgentRun(rows)
+			if err != nil {
+				return err
+			}
+			runs = append(runs, run)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, run := range runs {
+			if _, err := s.appendFactoryEventTx(ctx, tx, run.WorkItemID, run.ID, "server.store", "agent_run.running", map[string]any{"state": string(run.State)}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return runs, err
+}
+
 func (s *PostgresStore) ListAgentRuns(ctx context.Context, opts AgentRunListOptions) ([]model.AgentRun, error) {
 	query := `SELECT id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at FROM agent_runs`
 	where := []string{}

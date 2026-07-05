@@ -130,6 +130,33 @@ func TestRunOnceHonorsBatchSize(t *testing.T) {
 	}
 }
 
+func TestAcquireQueuedAgentRunsPreventsDuplicateProcessing(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := st.AcquireQueuedAgentRuns(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].ID != run.ID || first[0].State != model.AgentRunRunning {
+		t.Fatalf("first acquire=%#v", first)
+	}
+	second, err := st.AcquireQueuedAgentRuns(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 0 {
+		t.Fatalf("second acquire=%#v, want none", second)
+	}
+}
+
 func TestNewValidationAndDefaults(t *testing.T) {
 	if _, err := New(nil, ProcessorFunc(func(context.Context, model.AgentRun) error { return nil }), Config{}); err == nil {
 		t.Fatal("expected nil store error")
