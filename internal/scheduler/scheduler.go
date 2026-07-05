@@ -2,12 +2,15 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/store"
 )
+
+var ErrCancelled = errors.New("agent_run_cancelled")
 
 type Processor interface {
 	ProcessAgentRun(context.Context, model.AgentRun) error
@@ -20,8 +23,9 @@ func (fn ProcessorFunc) ProcessAgentRun(ctx context.Context, run model.AgentRun)
 }
 
 type Config struct {
-	PollEvery time.Duration
-	BatchSize int
+	PollEvery  time.Duration
+	RunTimeout time.Duration
+	BatchSize  int
 }
 
 type Scheduler struct {
@@ -85,7 +89,25 @@ func (s *Scheduler) processOne(ctx context.Context, run model.AgentRun) error {
 	if _, err := s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemRunning); err != nil {
 		return err
 	}
-	if err := s.processor.ProcessAgentRun(ctx, run); err != nil {
+	processCtx := ctx
+	var cancel context.CancelFunc
+	if s.cfg.RunTimeout > 0 {
+		processCtx, cancel = context.WithTimeout(ctx, s.cfg.RunTimeout)
+		defer cancel()
+	}
+	if err := s.processor.ProcessAgentRun(processCtx, run); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || processCtx.Err() == context.DeadlineExceeded {
+			_, _ = s.store.UpdateAgentRunState(ctx, run.ID, model.AgentRunTimedOut)
+			_, _ = s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemFailed)
+			_, _ = s.store.AppendFactoryEvent(ctx, run.WorkItemID, run.ID, "server.scheduler", "agent_run.processor.timed_out", map[string]any{"timeout_ms": s.cfg.RunTimeout.Milliseconds()})
+			return nil
+		}
+		if errors.Is(err, ErrCancelled) {
+			_, _ = s.store.UpdateAgentRunState(ctx, run.ID, model.AgentRunCancelled)
+			_, _ = s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemCancelled)
+			_, _ = s.store.AppendFactoryEvent(ctx, run.WorkItemID, run.ID, "server.scheduler", "agent_run.processor.cancelled", map[string]any{})
+			return nil
+		}
 		_, _ = s.store.UpdateAgentRunState(ctx, run.ID, model.AgentRunFailed)
 		_, _ = s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemFailed)
 		_, _ = s.store.AppendFactoryEvent(ctx, run.WorkItemID, run.ID, "server.scheduler", "agent_run.processor.failed", map[string]any{"message": err.Error()})

@@ -98,6 +98,105 @@ func TestRunOnceMarksFailureAndContinues(t *testing.T) {
 	}
 }
 
+func TestRunOnceMarksTimeout(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(st, ProcessorFunc(func(ctx context.Context, _ model.AgentRun) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}), Config{RunTimeout: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	updatedRun, err := st.GetAgentRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedRun.State != model.AgentRunTimedOut || updatedRun.CompletedAt == nil {
+		t.Fatalf("updated run=%#v, want timed out", updatedRun)
+	}
+	updatedItem, err := st.GetWorkItem(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedItem.State != model.WorkItemFailed {
+		t.Fatalf("work item state=%s want failed", updatedItem.State)
+	}
+}
+
+func TestRunOnceMarksCancelled(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(st, ProcessorFunc(func(context.Context, model.AgentRun) error { return ErrCancelled }), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	updatedRun, err := st.GetAgentRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedRun.State != model.AgentRunCancelled || updatedRun.CompletedAt == nil {
+		t.Fatalf("updated run=%#v, want cancelled", updatedRun)
+	}
+	updatedItem, err := st.GetWorkItem(ctx, item.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updatedItem.State != model.WorkItemCancelled {
+		t.Fatalf("work item state=%s want cancelled", updatedItem.State)
+	}
+}
+
+func TestRunOnceSkipsQueuedRunCancelledBeforeAcquire(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.UpdateAgentRunState(ctx, run.ID, model.AgentRunCancelled); err != nil {
+		t.Fatal(err)
+	}
+	var processed bool
+	s, err := New(st, ProcessorFunc(func(context.Context, model.AgentRun) error { processed = true; return nil }), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.RunOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || processed {
+		t.Fatalf("count=%d processed=%v, want skipped", count, processed)
+	}
+}
+
 func TestRunOnceHonorsBatchSize(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()
