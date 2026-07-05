@@ -100,7 +100,7 @@ Acceptance criteria:
 | ID | State | Depends On | Task |
 |---|---|---|---|
 | `SF-020` | `DONE` | `SF-010` | Design Postgres schema for existing sandboxes, sessions, commands, events, API tokens, and idempotency keys. |
-| `SF-021` | `NOT_STARTED` | `SF-020` | Add migration framework. |
+| `SF-021` | `DONE` | `SF-020` | Add migration framework. |
 | `SF-022` | `NOT_STARTED` | `SF-021` | Implement Postgres-backed `store.Store`. |
 | `SF-023` | `NOT_STARTED` | `SF-022` | Preserve memory store for dev and tests. |
 | `SF-024` | `NOT_STARTED` | `SF-022` | Add transactional event append with related state mutation. |
