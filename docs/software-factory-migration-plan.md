@@ -146,7 +146,7 @@ Acceptance criteria:
 | `SF-043` | `DONE` | `SF-040` | Implement retry policy primitives. |
 | `SF-044` | `DONE` | `SF-040` | Implement run step events. |
 | `SF-045` | `DONE` | `SF-040` | Add scheduler recovery after server restart. |
-| `SF-046` | `NOT_STARTED` | `SF-040` | Add single-node scheduler first and defer distributed scheduling. |
+| `SF-046` | `DONE` | `SF-040` | Add single-node scheduler first and defer distributed scheduling. |
 
 Acceptance criteria:
 
