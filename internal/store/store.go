@@ -129,6 +129,9 @@ type Store interface {
 	AppendEvent(ctx context.Context, sandboxID, commandID, source, eventType string, data map[string]any) (model.Event, error)
 	ListSandboxEvents(ctx context.Context, sandboxID string, opts EventListOptions) ([]model.Event, int64, error)
 	ListCommandEvents(ctx context.Context, sandboxID, commandID string, opts EventListOptions) ([]model.Event, int64, error)
+	AppendFactoryEvent(ctx context.Context, workItemID, agentRunID, source, eventType string, data map[string]any) (model.Event, error)
+	ListWorkItemEvents(ctx context.Context, workItemID string, opts EventListOptions) ([]model.Event, int64, error)
+	ListAgentRunEvents(ctx context.Context, agentRunID string, opts EventListOptions) ([]model.Event, int64, error)
 
 	RememberIdempotencyKey(ctx context.Context, key, value string) (string, bool, error)
 }

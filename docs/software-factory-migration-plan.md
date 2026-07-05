@@ -124,8 +124,8 @@ Acceptance criteria:
 | `SF-032` | `DONE` | `SF-030` | Add `AgentRun` model. |
 | `SF-033` | `DONE` | `SF-032` | Add AgentRun states: `queued`, `provisioning`, `preparing`, `running`, `validating`, `publishing`, `completed`, `failed`, `cancelled`, and `timed_out`. |
 | `SF-034` | `DONE` | `SF-032` | Link AgentRun to Sandbox without replacing Sandbox. |
-| `SF-035` | `NOT_STARTED` | `SF-030` | Add factory-level events for work item lifecycle. |
-| `SF-036` | `NOT_STARTED` | `SF-032` | Add factory-level events for agent run lifecycle. |
+| `SF-035` | `DONE` | `SF-030` | Add factory-level events for work item lifecycle. |
+| `SF-036` | `DONE` | `SF-032` | Add factory-level events for agent run lifecycle. |
 | `SF-037` | `DONE` | `SF-030` | Add API endpoints for creating, listing, reading, and cancelling work items. |
 | `SF-038` | `DONE` | `SF-032` | Add API endpoints for creating, listing, reading, and cancelling agent runs. |
 | `SF-039` | `DONE` | `SF-038` | Add run-level event replay endpoint. |

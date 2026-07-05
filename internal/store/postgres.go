@@ -264,7 +264,16 @@ func (s *PostgresStore) AuthenticateAPIToken(ctx context.Context, token string) 
 func (s *PostgresStore) CreateWorkItem(ctx context.Context, in WorkItemCreate) (model.WorkItem, error) {
 	now := time.Now().UTC()
 	item := model.WorkItem{ID: newID("work"), Title: in.Title, Description: in.Description, SourceType: in.SourceType, SourceID: in.SourceID, Actor: in.Actor, State: model.WorkItemQueued, Priority: in.Priority, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO work_items (id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, item.ID, item.Title, item.Description, item.SourceType, item.SourceID, item.Actor, item.State, item.Priority, jsonParam(item.Metadata), item.InsertedAt, item.UpdatedAt)
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO work_items (id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, item.ID, item.Title, item.Description, item.SourceType, item.SourceID, item.Actor, item.State, item.Priority, jsonParam(item.Metadata), item.InsertedAt, item.UpdatedAt); err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO factory_event_sequences (work_item_id, next_seq) VALUES ($1, 0)`, item.ID); err != nil {
+			return err
+		}
+		_, err := s.appendFactoryEventTx(ctx, tx, item.ID, "", "server.store", "work_item.created", map[string]any{"state": string(item.State)})
+		return err
+	})
 	return item, err
 }
 
@@ -302,10 +311,19 @@ func (s *PostgresStore) GetWorkItem(ctx context.Context, workItemID string) (mod
 }
 
 func (s *PostgresStore) UpdateWorkItemState(ctx context.Context, workItemID string, state model.WorkItemState) (model.WorkItem, error) {
-	item, err := scanWorkItem(s.db.QueryRowContext(ctx, `UPDATE work_items SET state = $2, updated_at = $3 WHERE id = $1 RETURNING id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at`, workItemID, state, time.Now().UTC()))
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.WorkItem{}, ErrWorkItemNotFound
-	}
+	var item model.WorkItem
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var err error
+		item, err = scanWorkItem(tx.QueryRowContext(ctx, `UPDATE work_items SET state = $2, updated_at = $3 WHERE id = $1 RETURNING id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at`, workItemID, state, time.Now().UTC()))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrWorkItemNotFound
+		}
+		if err != nil {
+			return err
+		}
+		_, err = s.appendFactoryEventTx(ctx, tx, workItemID, "", "server.store", "work_item."+string(state), map[string]any{"state": string(state)})
+		return err
+	})
 	return item, err
 }
 
@@ -316,7 +334,13 @@ func (s *PostgresStore) CreateAgentRun(ctx context.Context, workItemID string, i
 	if run.SandboxID != "" {
 		sandboxID = run.SandboxID
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_runs (id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, run.ID, run.WorkItemID, sandboxID, run.Harness, run.Model, run.State, run.Prompt, run.Actor, jsonParam(run.Metadata), run.InsertedAt, run.UpdatedAt)
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO agent_runs (id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, run.ID, run.WorkItemID, sandboxID, run.Harness, run.Model, run.State, run.Prompt, run.Actor, jsonParam(run.Metadata), run.InsertedAt, run.UpdatedAt); err != nil {
+			return err
+		}
+		_, err := s.appendFactoryEventTx(ctx, tx, workItemID, run.ID, "server.store", "agent_run.created", map[string]any{"state": string(run.State), "harness": run.Harness, "model": run.Model})
+		return err
+	})
 	if err != nil {
 		if strings.Contains(err.Error(), "agent_runs_work_item_id_fkey") {
 			return model.AgentRun{}, ErrWorkItemNotFound
@@ -371,19 +395,28 @@ func (s *PostgresStore) GetAgentRun(ctx context.Context, agentRunID string) (mod
 
 func (s *PostgresStore) UpdateAgentRunState(ctx context.Context, agentRunID string, state model.AgentRunState) (model.AgentRun, error) {
 	now := time.Now().UTC()
-	query := `UPDATE agent_runs SET state = $2, updated_at = $3`
-	args := []any{agentRunID, state, now}
-	if state == model.AgentRunRunning {
-		query += `, started_at = COALESCE(started_at, $3)`
-	}
-	if isTerminalAgentRunState(state) {
-		query += `, completed_at = $3`
-	}
-	query += ` WHERE id = $1 RETURNING id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`
-	run, err := scanAgentRun(s.db.QueryRowContext(ctx, query, args...))
-	if errors.Is(err, sql.ErrNoRows) {
-		return model.AgentRun{}, ErrAgentRunNotFound
-	}
+	var run model.AgentRun
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		query := `UPDATE agent_runs SET state = $2, updated_at = $3`
+		args := []any{agentRunID, state, now}
+		if state == model.AgentRunRunning {
+			query += `, started_at = COALESCE(started_at, $3)`
+		}
+		if isTerminalAgentRunState(state) {
+			query += `, completed_at = $3`
+		}
+		query += ` WHERE id = $1 RETURNING id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`
+		var err error
+		run, err = scanAgentRun(tx.QueryRowContext(ctx, query, args...))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrAgentRunNotFound
+		}
+		if err != nil {
+			return err
+		}
+		_, err = s.appendFactoryEventTx(ctx, tx, run.WorkItemID, run.ID, "server.store", "agent_run."+string(state), map[string]any{"state": string(state)})
+		return err
+	})
 	return run, err
 }
 
@@ -490,6 +523,46 @@ func (s *PostgresStore) ListCommandEvents(ctx context.Context, sandboxID, comman
 	return s.listEvents(ctx, `SELECT id, sandbox_id, command_id, seq, type, source, timestamp, data FROM events WHERE sandbox_id = $1 AND command_id = $2 AND seq > $3 ORDER BY seq ASC`, sandboxID, commandID, opts)
 }
 
+func (s *PostgresStore) AppendFactoryEvent(ctx context.Context, workItemID, agentRunID, source, eventType string, data map[string]any) (model.Event, error) {
+	var ev model.Event
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		var exists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM work_items WHERE id = $1)`, workItemID).Scan(&exists); err != nil {
+			return err
+		}
+		if !exists {
+			return ErrWorkItemNotFound
+		}
+		if agentRunID != "" {
+			if err := tx.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM agent_runs WHERE id = $1)`, agentRunID).Scan(&exists); err != nil {
+				return err
+			}
+			if !exists {
+				return ErrAgentRunNotFound
+			}
+		}
+		var err error
+		ev, err = s.appendFactoryEventTx(ctx, tx, workItemID, agentRunID, source, eventType, data)
+		return err
+	})
+	return ev, err
+}
+
+func (s *PostgresStore) ListWorkItemEvents(ctx context.Context, workItemID string, opts EventListOptions) ([]model.Event, int64, error) {
+	if _, err := s.GetWorkItem(ctx, workItemID); err != nil {
+		return nil, opts.After, err
+	}
+	return s.listFactoryEvents(ctx, `SELECT id, work_item_id, agent_run_id, seq, type, source, timestamp, data FROM factory_events WHERE work_item_id = $1 AND seq > $2 ORDER BY seq ASC`, workItemID, "", opts)
+}
+
+func (s *PostgresStore) ListAgentRunEvents(ctx context.Context, agentRunID string, opts EventListOptions) ([]model.Event, int64, error) {
+	run, err := s.GetAgentRun(ctx, agentRunID)
+	if err != nil {
+		return nil, opts.After, err
+	}
+	return s.listFactoryEvents(ctx, `SELECT id, work_item_id, agent_run_id, seq, type, source, timestamp, data FROM factory_events WHERE work_item_id = $1 AND agent_run_id = $2 AND seq > $3 ORDER BY seq ASC`, run.WorkItemID, agentRunID, opts)
+}
+
 func (s *PostgresStore) RememberIdempotencyKey(ctx context.Context, key, value string) (string, bool, error) {
 	var out string
 	var created bool
@@ -536,6 +609,22 @@ func (s *PostgresStore) appendEventTx(ctx context.Context, tx *sql.Tx, sandboxID
 	return ev, nil
 }
 
+func (s *PostgresStore) appendFactoryEventTx(ctx context.Context, tx *sql.Tx, workItemID, agentRunID, source, eventType string, data map[string]any) (model.Event, error) {
+	var seq int64
+	if err := tx.QueryRowContext(ctx, `UPDATE factory_event_sequences SET next_seq = next_seq + 1 WHERE work_item_id = $1 RETURNING next_seq`, workItemID).Scan(&seq); err != nil {
+		return model.Event{}, err
+	}
+	ev := model.Event{ID: newID("evt"), WorkItemID: workItemID, AgentRunID: agentRunID, Seq: seq, Type: eventType, Source: source, Timestamp: time.Now().UTC(), Data: data}
+	var agentRunIDParam any
+	if agentRunID != "" {
+		agentRunIDParam = agentRunID
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO factory_events (id, work_item_id, agent_run_id, seq, type, source, timestamp, data) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, ev.ID, ev.WorkItemID, agentRunIDParam, ev.Seq, ev.Type, ev.Source, ev.Timestamp, jsonParam(ev.Data)); err != nil {
+		return model.Event{}, err
+	}
+	return ev, nil
+}
+
 func (s *PostgresStore) listEvents(ctx context.Context, query, sandboxID, commandID string, opts EventListOptions) ([]model.Event, int64, error) {
 	var rows *sql.Rows
 	var err error
@@ -556,6 +645,37 @@ func (s *PostgresStore) listEvents(ctx context.Context, query, sandboxID, comman
 	next := opts.After
 	for rows.Next() {
 		ev, err := scanEvent(rows)
+		if err != nil {
+			return nil, opts.After, err
+		}
+		out = append(out, ev)
+		if ev.Seq > next {
+			next = ev.Seq
+		}
+	}
+	return out, next, rows.Err()
+}
+
+func (s *PostgresStore) listFactoryEvents(ctx context.Context, query, workItemID, agentRunID string, opts EventListOptions) ([]model.Event, int64, error) {
+	var rows *sql.Rows
+	var err error
+	if agentRunID == "" {
+		args := []any{workItemID, opts.After}
+		query, args = appendLimit(query, args, opts.Limit)
+		rows, err = s.db.QueryContext(ctx, query, args...)
+	} else {
+		args := []any{workItemID, agentRunID, opts.After}
+		query, args = appendLimit(query, args, opts.Limit)
+		rows, err = s.db.QueryContext(ctx, query, args...)
+	}
+	if err != nil {
+		return nil, opts.After, err
+	}
+	defer rows.Close()
+	out := []model.Event{}
+	next := opts.After
+	for rows.Next() {
+		ev, err := scanFactoryEvent(rows)
 		if err != nil {
 			return nil, opts.After, err
 		}
@@ -731,6 +851,23 @@ func scanEvent(row rowScanner) (model.Event, error) {
 	}
 	if commandID.Valid {
 		ev.CommandID = commandID.String
+	}
+	if err := scanJSON(data, &ev.Data); err != nil {
+		return model.Event{}, err
+	}
+	return ev, nil
+}
+
+func scanFactoryEvent(row rowScanner) (model.Event, error) {
+	var ev model.Event
+	var agentRunID sql.NullString
+	var data []byte
+	err := row.Scan(&ev.ID, &ev.WorkItemID, &agentRunID, &ev.Seq, &ev.Type, &ev.Source, &ev.Timestamp, &data)
+	if err != nil {
+		return model.Event{}, err
+	}
+	if agentRunID.Valid {
+		ev.AgentRunID = agentRunID.String
 	}
 	if err := scanJSON(data, &ev.Data); err != nil {
 		return model.Event{}, err

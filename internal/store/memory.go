@@ -25,29 +25,33 @@ var (
 )
 
 type MemoryStore struct {
-	mu          sync.Mutex
-	sandboxes   map[string]model.Sandbox
-	sessions    map[string]model.ClientSession
-	commands    map[string]map[string]model.Command
-	apiTokens   map[string]model.APIToken
-	workItems   map[string]model.WorkItem
-	agentRuns   map[string]model.AgentRun
-	events      map[string][]model.Event
-	nextSeq     map[string]int64
-	idempotency map[string]string
+	mu             sync.Mutex
+	sandboxes      map[string]model.Sandbox
+	sessions       map[string]model.ClientSession
+	commands       map[string]map[string]model.Command
+	apiTokens      map[string]model.APIToken
+	workItems      map[string]model.WorkItem
+	agentRuns      map[string]model.AgentRun
+	events         map[string][]model.Event
+	nextSeq        map[string]int64
+	factoryEvents  map[string][]model.Event
+	nextFactorySeq map[string]int64
+	idempotency    map[string]string
 }
 
 func NewMemoryStore() *MemoryStore {
 	return &MemoryStore{
-		sandboxes:   map[string]model.Sandbox{},
-		sessions:    map[string]model.ClientSession{},
-		commands:    map[string]map[string]model.Command{},
-		apiTokens:   map[string]model.APIToken{},
-		workItems:   map[string]model.WorkItem{},
-		agentRuns:   map[string]model.AgentRun{},
-		events:      map[string][]model.Event{},
-		nextSeq:     map[string]int64{},
-		idempotency: map[string]string{},
+		sandboxes:      map[string]model.Sandbox{},
+		sessions:       map[string]model.ClientSession{},
+		commands:       map[string]map[string]model.Command{},
+		apiTokens:      map[string]model.APIToken{},
+		workItems:      map[string]model.WorkItem{},
+		agentRuns:      map[string]model.AgentRun{},
+		events:         map[string][]model.Event{},
+		nextSeq:        map[string]int64{},
+		factoryEvents:  map[string][]model.Event{},
+		nextFactorySeq: map[string]int64{},
+		idempotency:    map[string]string{},
 	}
 }
 
@@ -252,6 +256,7 @@ func (s *MemoryStore) CreateWorkItem(_ context.Context, in WorkItemCreate) (mode
 	now := time.Now().UTC()
 	item := model.WorkItem{ID: newID("work"), Title: in.Title, Description: in.Description, SourceType: in.SourceType, SourceID: in.SourceID, Actor: in.Actor, State: model.WorkItemQueued, Priority: in.Priority, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
 	s.workItems[item.ID] = item
+	s.appendFactoryEventLocked(item.ID, "", "server.store", "work_item.created", map[string]any{"state": string(item.State)})
 	return item, nil
 }
 
@@ -289,6 +294,7 @@ func (s *MemoryStore) UpdateWorkItemState(_ context.Context, workItemID string, 
 	item.State = state
 	item.UpdatedAt = time.Now().UTC()
 	s.workItems[workItemID] = item
+	s.appendFactoryEventLocked(workItemID, "", "server.store", "work_item."+string(state), map[string]any{"state": string(state)})
 	return item, nil
 }
 
@@ -306,6 +312,7 @@ func (s *MemoryStore) CreateAgentRun(_ context.Context, workItemID string, in Ag
 	now := time.Now().UTC()
 	run := model.AgentRun{ID: newID("run"), WorkItemID: workItemID, SandboxID: in.SandboxID, Harness: in.Harness, Model: in.Model, State: model.AgentRunQueued, Prompt: in.Prompt, Actor: in.Actor, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
 	s.agentRuns[run.ID] = run
+	s.appendFactoryEventLocked(workItemID, run.ID, "server.store", "agent_run.created", map[string]any{"state": string(run.State), "harness": run.Harness, "model": run.Model})
 	return run, nil
 }
 
@@ -353,6 +360,7 @@ func (s *MemoryStore) UpdateAgentRunState(_ context.Context, agentRunID string, 
 		run.CompletedAt = &now
 	}
 	s.agentRuns[agentRunID] = run
+	s.appendFactoryEventLocked(run.WorkItemID, run.ID, "server.store", "agent_run."+string(state), map[string]any{"state": string(state)})
 	return run, nil
 }
 
@@ -443,6 +451,39 @@ func (s *MemoryStore) ListCommandEvents(_ context.Context, sandboxID, commandID 
 	return filterEvents(s.events[sandboxID], commandID, opts, true)
 }
 
+func (s *MemoryStore) AppendFactoryEvent(_ context.Context, workItemID, agentRunID, source, eventType string, data map[string]any) (model.Event, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.workItems[workItemID]; !ok {
+		return model.Event{}, ErrWorkItemNotFound
+	}
+	if agentRunID != "" {
+		if _, ok := s.agentRuns[agentRunID]; !ok {
+			return model.Event{}, ErrAgentRunNotFound
+		}
+	}
+	return s.appendFactoryEventLocked(workItemID, agentRunID, source, eventType, data), nil
+}
+
+func (s *MemoryStore) ListWorkItemEvents(_ context.Context, workItemID string, opts EventListOptions) ([]model.Event, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.workItems[workItemID]; !ok {
+		return nil, opts.After, ErrWorkItemNotFound
+	}
+	return filterFactoryEvents(s.factoryEvents[workItemID], "", opts, false)
+}
+
+func (s *MemoryStore) ListAgentRunEvents(_ context.Context, agentRunID string, opts EventListOptions) ([]model.Event, int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, ok := s.agentRuns[agentRunID]
+	if !ok {
+		return nil, opts.After, ErrAgentRunNotFound
+	}
+	return filterFactoryEvents(s.factoryEvents[run.WorkItemID], agentRunID, opts, true)
+}
+
 func (s *MemoryStore) RememberIdempotencyKey(_ context.Context, key, value string) (string, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -460,6 +501,13 @@ func (s *MemoryStore) appendEventLocked(sandboxID, commandID, source, eventType 
 	return ev
 }
 
+func (s *MemoryStore) appendFactoryEventLocked(workItemID, agentRunID, source, eventType string, data map[string]any) model.Event {
+	s.nextFactorySeq[workItemID]++
+	ev := model.Event{ID: newID("evt"), WorkItemID: workItemID, AgentRunID: agentRunID, Seq: s.nextFactorySeq[workItemID], Type: eventType, Source: source, Timestamp: time.Now().UTC(), Data: data}
+	s.factoryEvents[workItemID] = append(s.factoryEvents[workItemID], ev)
+	return ev
+}
+
 func filterEvents(events []model.Event, commandID string, opts EventListOptions, commandOnly bool) ([]model.Event, int64, error) {
 	out := []model.Event{}
 	next := opts.After
@@ -468,6 +516,27 @@ func filterEvents(events []model.Event, commandID string, opts EventListOptions,
 			continue
 		}
 		if commandOnly && ev.CommandID != commandID {
+			continue
+		}
+		out = append(out, ev)
+		if ev.Seq > next {
+			next = ev.Seq
+		}
+		if opts.Limit > 0 && len(out) >= opts.Limit {
+			break
+		}
+	}
+	return out, next, nil
+}
+
+func filterFactoryEvents(events []model.Event, agentRunID string, opts EventListOptions, agentRunOnly bool) ([]model.Event, int64, error) {
+	out := []model.Event{}
+	next := opts.After
+	for _, ev := range events {
+		if ev.Seq <= opts.After {
+			continue
+		}
+		if agentRunOnly && ev.AgentRunID != agentRunID {
 			continue
 		}
 		out = append(out, ev)

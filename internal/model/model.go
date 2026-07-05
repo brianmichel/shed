@@ -160,12 +160,14 @@ type Command struct {
 }
 
 type Event struct {
-	ID        string         `json:"id"`
-	SandboxID string         `json:"sandbox_id"`
-	CommandID string         `json:"command_id,omitempty"`
-	Seq       int64          `json:"seq"`
-	Type      string         `json:"type"`
-	Source    string         `json:"source,omitempty"`
-	Timestamp time.Time      `json:"timestamp"`
-	Data      map[string]any `json:"data,omitempty"`
+	ID         string         `json:"id"`
+	SandboxID  string         `json:"sandbox_id,omitempty"`
+	CommandID  string         `json:"command_id,omitempty"`
+	WorkItemID string         `json:"work_item_id,omitempty"`
+	AgentRunID string         `json:"agent_run_id,omitempty"`
+	Seq        int64          `json:"seq"`
+	Type       string         `json:"type"`
+	Source     string         `json:"source,omitempty"`
+	Timestamp  time.Time      `json:"timestamp"`
+	Data       map[string]any `json:"data,omitempty"`
 }

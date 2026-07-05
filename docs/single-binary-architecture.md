@@ -85,6 +85,7 @@ Core endpoints:
 - `GET /v1/work-items`
 - `GET /v1/work-items/{work_item_id}`
 - `POST /v1/work-items/{work_item_id}/cancel`
+- `GET /v1/work-items/{work_item_id}/events?after=N`
 - `POST /v1/work-items/{work_item_id}/runs` — create an agent run for a work item.
 - `GET /v1/work-items/{work_item_id}/runs`
 - `GET /v1/agent-runs`
@@ -173,11 +174,13 @@ Each sandbox has a lease with TTL and expiry. Activity may extend the lease up t
 
 ### Event model
 
-Events are append-only per sandbox and per command. Each event has:
+Events are append-only per sandbox/command and per factory work item/agent run. Each event has:
 
 - stable `id`
-- `sandbox_id`
+- optional `sandbox_id`
 - optional `command_id`
+- optional `work_item_id`
+- optional `agent_run_id`
 - monotonic `seq`
 - `type`
 - RFC3339 `timestamp`

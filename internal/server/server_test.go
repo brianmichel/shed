@@ -96,6 +96,24 @@ func TestWorkItemAPI(t *testing.T) {
 	if cancelled.Data.State != model.WorkItemCancelled {
 		t.Fatalf("cancelled state=%s", cancelled.Data.State)
 	}
+
+	eventsReq := httptest.NewRequest(http.MethodGet, "/v1/work-items/"+created.Data.ID+"/events", nil)
+	eventsReq.Header.Set("Authorization", "Bearer api-secret")
+	eventsReq.SetPathValue("work_item_id", created.Data.ID)
+	events := httptest.NewRecorder()
+	srv.ServeHTTP(events, eventsReq)
+	if events.Code != http.StatusOK {
+		t.Fatalf("events status=%d body=%s", events.Code, events.Body.String())
+	}
+	var replay struct {
+		Data []model.Event `json:"data"`
+	}
+	if err := json.NewDecoder(events.Body).Decode(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if len(replay.Data) != 2 || replay.Data[0].Type != "work_item.created" || replay.Data[1].Type != "work_item.cancelled" {
+		t.Fatalf("work item events=%#v", replay.Data)
+	}
 }
 
 func TestAgentRunAPI(t *testing.T) {
@@ -185,6 +203,24 @@ func TestAgentRunAPI(t *testing.T) {
 	}
 	if len(replay.Data) != 0 || replay.NextCursor != 7 {
 		t.Fatalf("replay=%#v, want empty at cursor 7", replay)
+	}
+
+	allEventsReq := httptest.NewRequest(http.MethodGet, "/v1/agent-runs/"+created.Data.ID+"/events", nil)
+	allEventsReq.Header.Set("Authorization", "Bearer api-secret")
+	allEventsReq.SetPathValue("agent_run_id", created.Data.ID)
+	allEvents := httptest.NewRecorder()
+	srv.ServeHTTP(allEvents, allEventsReq)
+	if allEvents.Code != http.StatusOK {
+		t.Fatalf("all events status=%d body=%s", allEvents.Code, allEvents.Body.String())
+	}
+	var allReplay struct {
+		Data []model.Event `json:"data"`
+	}
+	if err := json.NewDecoder(allEvents.Body).Decode(&allReplay); err != nil {
+		t.Fatal(err)
+	}
+	if len(allReplay.Data) != 2 || allReplay.Data[0].Type != "agent_run.created" || allReplay.Data[1].Type != "agent_run.cancelled" {
+		t.Fatalf("agent run events=%#v", allReplay.Data)
 	}
 }
 

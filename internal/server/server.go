@@ -192,6 +192,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/work-items", s.createWorkItem)
 	s.mux.HandleFunc("GET /v1/work-items/{work_item_id}", s.getWorkItem)
 	s.mux.HandleFunc("POST /v1/work-items/{work_item_id}/cancel", s.cancelWorkItem)
+	s.mux.HandleFunc("GET /v1/work-items/{work_item_id}/events", s.workItemEvents)
 	s.mux.HandleFunc("GET /v1/work-items/{work_item_id}/runs", s.listWorkItemAgentRuns)
 	s.mux.HandleFunc("POST /v1/work-items/{work_item_id}/runs", s.createAgentRun)
 	s.mux.HandleFunc("GET /v1/agent-runs", s.listAgentRuns)
@@ -294,6 +295,15 @@ func (s *Server) cancelWorkItem(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, 200, map[string]any{"data": item})
 }
 
+func (s *Server) workItemEvents(w http.ResponseWriter, r *http.Request) {
+	events, next, err := s.store.ListWorkItemEvents(r.Context(), r.PathValue("work_item_id"), parseEventListOptions(r))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeEvents(w, r, events, next)
+}
+
 func (s *Server) createAgentRun(w http.ResponseWriter, r *http.Request) {
 	var in store.AgentRunCreate
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
@@ -348,16 +358,7 @@ func (s *Server) cancelAgentRun(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) agentRunEvents(w http.ResponseWriter, r *http.Request) {
-	run, err := s.store.GetAgentRun(r.Context(), r.PathValue("agent_run_id"))
-	if err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	if run.SandboxID == "" {
-		writeEvents(w, r, nil, parseAfter(r))
-		return
-	}
-	events, next, err := s.store.ListSandboxEvents(r.Context(), run.SandboxID, parseEventListOptions(r))
+	events, next, err := s.store.ListAgentRunEvents(r.Context(), r.PathValue("agent_run_id"), parseEventListOptions(r))
 	if err != nil {
 		writeStoreErr(w, err)
 		return
