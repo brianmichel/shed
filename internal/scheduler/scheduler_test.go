@@ -347,6 +347,48 @@ func TestAcquireQueuedAgentRunsPreventsDuplicateProcessing(t *testing.T) {
 	}
 }
 
+func TestRunOnceRecoversStaleRunningRuns(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.AcquireQueuedAgentRuns(ctx, 1); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Millisecond)
+	s, err := New(st, ProcessorFunc(func(context.Context, model.AgentRun) error { return nil }), Config{RecoveryAfter: time.Nanosecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, err := s.RunOnce(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("count=%d want recovered run to process", count)
+	}
+	updated, err := st.GetAgentRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.State != model.AgentRunCompleted || updated.Attempt != 2 {
+		t.Fatalf("updated run=%#v, want completed attempt 2", updated)
+	}
+	events, _, err := st.ListAgentRunEvents(ctx, run.ID, store.EventListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEventType(events, "agent_run.recovered") {
+		t.Fatalf("recovery event missing: %#v", events)
+	}
+}
+
 func TestNewValidationAndDefaults(t *testing.T) {
 	if _, err := New(nil, ProcessorFunc(func(context.Context, model.AgentRun) error { return nil }), Config{}); err == nil {
 		t.Fatal("expected nil store error")

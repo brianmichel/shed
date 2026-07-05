@@ -23,10 +23,11 @@ func (fn ProcessorFunc) ProcessAgentRun(ctx context.Context, run model.AgentRun)
 }
 
 type Config struct {
-	PollEvery   time.Duration
-	RunTimeout  time.Duration
-	BatchSize   int
-	MaxAttempts int
+	PollEvery     time.Duration
+	RunTimeout    time.Duration
+	RecoveryAfter time.Duration
+	BatchSize     int
+	MaxAttempts   int
 }
 
 type Scheduler struct {
@@ -70,6 +71,11 @@ func (s *Scheduler) Run(ctx context.Context) error {
 }
 
 func (s *Scheduler) RunOnce(ctx context.Context) (int, error) {
+	if s.cfg.RecoveryAfter > 0 {
+		if _, err := s.store.RecoverStaleAgentRuns(ctx, time.Now().UTC().Add(-s.cfg.RecoveryAfter)); err != nil {
+			return 0, err
+		}
+	}
 	runs, err := s.store.AcquireQueuedAgentRuns(ctx, s.cfg.BatchSize)
 	if err != nil {
 		return 0, err

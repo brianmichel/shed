@@ -397,6 +397,38 @@ RETURNING id, work_item_id, sandbox_id, harness, model, state, attempt, prompt, 
 	return runs, err
 }
 
+func (s *PostgresStore) RecoverStaleAgentRuns(ctx context.Context, olderThan time.Time) ([]model.AgentRun, error) {
+	runs := []model.AgentRun{}
+	err := s.withTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `UPDATE agent_runs
+SET state = $2,
+    updated_at = $3
+WHERE state = $1 AND updated_at < $4
+RETURNING id, work_item_id, sandbox_id, harness, model, state, attempt, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`, model.AgentRunRunning, model.AgentRunQueued, time.Now().UTC(), olderThan)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			run, err := scanAgentRun(rows)
+			if err != nil {
+				return err
+			}
+			runs = append(runs, run)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		for _, run := range runs {
+			if _, err := s.appendFactoryEventTx(ctx, tx, run.WorkItemID, run.ID, "server.store", "agent_run.recovered", map[string]any{"state": string(run.State), "attempt": run.Attempt}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return runs, err
+}
+
 func (s *PostgresStore) ListAgentRuns(ctx context.Context, opts AgentRunListOptions) ([]model.AgentRun, error) {
 	query := `SELECT id, work_item_id, sandbox_id, harness, model, state, attempt, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at FROM agent_runs`
 	where := []string{}

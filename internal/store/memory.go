@@ -347,6 +347,25 @@ func (s *MemoryStore) AcquireQueuedAgentRuns(_ context.Context, limit int) ([]mo
 	return queued, nil
 }
 
+func (s *MemoryStore) RecoverStaleAgentRuns(_ context.Context, olderThan time.Time) ([]model.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	recovered := []model.AgentRun{}
+	now := time.Now().UTC()
+	for _, run := range s.agentRuns {
+		if run.State != model.AgentRunRunning || !run.UpdatedAt.Before(olderThan) {
+			continue
+		}
+		run.State = model.AgentRunQueued
+		run.UpdatedAt = now
+		s.agentRuns[run.ID] = run
+		s.appendFactoryEventLocked(run.WorkItemID, run.ID, "server.store", "agent_run.recovered", map[string]any{"state": string(run.State), "attempt": run.Attempt})
+		recovered = append(recovered, run)
+	}
+	sort.Slice(recovered, func(i, j int) bool { return recovered[i].InsertedAt.Before(recovered[j].InsertedAt) })
+	return recovered, nil
+}
+
 func (s *MemoryStore) ListAgentRuns(_ context.Context, opts AgentRunListOptions) ([]model.AgentRun, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
