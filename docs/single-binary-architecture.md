@@ -7,7 +7,7 @@ Shed is one portable Go binary that can run in server, client, or dev mode.
 - One binary, three modes: `server`, `client`, and `dev`.
 - Preserve the control-plane vs in-compute execution boundary inside the Go codebase.
 - Provide a stable API for the core journey: acquire/register compute, run a command, observe ordered events, release.
-- Use in-memory storage first behind interfaces that can later be backed by SQL.
+- Use storage behind interfaces with in-memory storage for dev/prototype use and Postgres for durable server state.
 - Serve a minimal operator UI from the binary itself.
 - Keep dev mode production-faithful: no shortcuts around auth, sessions, leases, protocol, events, or UI.
 
@@ -171,9 +171,9 @@ Cursors are sequence numbers. `after=N` returns events with `seq > N`.
 
 ## Store design
 
-`internal/store.Store` is the boundary for all mutations and reads. The initial implementation is `MemoryStore`, protected by a mutex and suitable for dev/prototype use.
+`internal/store.Store` is the boundary for all mutations and reads. `MemoryStore` is protected by a mutex and suitable for dev/prototype use. `PostgresStore` provides durable server state and runs embedded SQL migrations through `store.Migrate`.
 
-Future SQL stores should preserve:
+Durable stores should preserve:
 
 - transactional command/sandbox state updates with event append.
 - uniqueness for IDs and idempotency keys.

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -16,6 +17,7 @@ import (
 	"github.com/brianmichel/shed/internal/dev"
 	"github.com/brianmichel/shed/internal/server"
 	"github.com/brianmichel/shed/internal/store"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
@@ -55,6 +57,8 @@ func runServer(ctx context.Context, args []string) error {
 	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
 	defaultCompute := fs.String("compute-driver", envOr("SHED_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
 	workspace := fs.String("compute-workspace-root", envOr("SHED_COMPUTE_WORKSPACE", ".shed-server/workspace"), "workspace root for the built-in local compute")
+	storeKind := fs.String("store", envOr("SHED_STORE", "memory"), "state store: memory or postgres")
+	postgresURL := fs.String("postgres-url", envOr("SHED_POSTGRES_URL", ""), "Postgres connection URL when -store=postgres")
 	var plugins pluginConfigFlag
 	plugins.setMany(envOr("SHED_COMPUTE_PLUGINS", ""))
 	fs.Var(&plugins, "compute-plugin", "external compute plugin as name=/path/to/plugin; repeatable")
@@ -69,7 +73,11 @@ func runServer(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return server.New(server.Config{Addr: *addr, UIEnabled: *uiEnabled, ComputeManager: mgr, DefaultCompute: *defaultCompute, APIToken: *apiToken}, store.NewMemoryStore()).Start(ctx)
+	st, err := buildStore(ctx, *storeKind, *postgresURL)
+	if err != nil {
+		return err
+	}
+	return server.New(server.Config{Addr: *addr, UIEnabled: *uiEnabled, ComputeManager: mgr, DefaultCompute: *defaultCompute, APIToken: *apiToken}, st).Start(ctx)
 }
 
 func runClient(ctx context.Context, args []string) error {
@@ -150,6 +158,33 @@ func buildComputeManager(ctx context.Context, defaultCompute, workspace string, 
 		}
 	}
 	return mgr, nil
+}
+
+func buildStore(ctx context.Context, kind, postgresURL string) (store.Store, error) {
+	switch strings.TrimSpace(kind) {
+	case "", "memory":
+		return store.NewMemoryStore(), nil
+	case "postgres":
+		if strings.TrimSpace(postgresURL) == "" {
+			return nil, fmt.Errorf("-postgres-url or SHED_POSTGRES_URL is required when -store=postgres")
+		}
+		db, err := sql.Open("pgx", postgresURL)
+		if err != nil {
+			return nil, err
+		}
+		if err := db.PingContext(ctx); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		st, err := store.NewMigratedPostgresStore(ctx, db)
+		if err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+		return st, nil
+	default:
+		return nil, fmt.Errorf("unknown store %q", kind)
+	}
 }
 
 func envOr(k, d string) string {

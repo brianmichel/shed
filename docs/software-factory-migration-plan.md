@@ -102,12 +102,12 @@ Acceptance criteria:
 | `SF-020` | `DONE` | `SF-010` | Design Postgres schema for existing sandboxes, sessions, commands, events, API tokens, and idempotency keys. |
 | `SF-021` | `DONE` | `SF-020` | Add migration framework. |
 | `SF-022` | `DONE` | `SF-021` | Implement Postgres-backed `store.Store`. |
-| `SF-023` | `NOT_STARTED` | `SF-022` | Preserve memory store for dev and tests. |
+| `SF-023` | `DONE` | `SF-022` | Preserve memory store for dev and tests. |
 | `SF-024` | `NOT_STARTED` | `SF-022` | Add transactional event append with related state mutation. |
 | `SF-025` | `NOT_STARTED` | `SF-022` | Add pagination and filtering support to store interfaces. |
 | `SF-026` | `NOT_STARTED` | `SF-022` | Add durable idempotency for external create operations. |
 | `SF-027` | `NOT_STARTED` | `SF-022` | Add restart recovery tests for sandboxes, sessions, commands, and events. |
-| `SF-028` | `NOT_STARTED` | `SF-022` | Add config flags and env vars for Postgres connection and store selection. |
+| `SF-028` | `DONE` | `SF-022` | Add config flags and env vars for Postgres connection and store selection. |
 
 Acceptance criteria:
 

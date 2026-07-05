@@ -20,12 +20,15 @@ mise run run:dev
 
 Then open `http://127.0.0.1:6464/ui/` and enter `shed-dev-token` when prompted, or use the API under `http://127.0.0.1:6464/v1` with `Authorization: Bearer shed-dev-token`. Create additional API tokens with `POST /v1/api-tokens`.
 
+`shed server` defaults to the in-memory store. To use Postgres, start the server with `-store=postgres -postgres-url=$DATABASE_URL` or set `SHED_STORE=postgres` and `SHED_POSTGRES_URL`.
+
 ## Current status
 
 The root Go module contains the single-binary foundation:
 
 - CLI for `server`, `client`, and `dev`.
 - In-memory store behind interfaces.
+- Postgres migration framework and store implementation for durable server state.
 - Versioned compute driver interface with HashiCorp go-plugin/gRPC adapter.
 - Built-in local workspace/process compute driver.
 - Server/client WebSocket protocol envelope.
