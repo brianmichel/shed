@@ -64,12 +64,12 @@ Core objects:
 
 | ID | State | Depends On | Task |
 |---|---|---|---|
-| `SF-000` | `NOT_STARTED` | None | Decide product positioning: self-hostable software factory for safe, auditable coding agents. |
-| `SF-001` | `NOT_STARTED` | `SF-000` | Define MVP promise: API or GitHub task in, isolated agent run, diff or PR artifacts out. |
-| `SF-002` | `NOT_STARTED` | `SF-000` | Define non-goals for first release: multi-agent swarms, advanced memory, arbitrary storage plugins, and complex workflow DSL. |
-| `SF-003` | `NOT_STARTED` | `SF-000` | Define product glossary: WorkItem, AgentRun, Sandbox, Command, Artifact, Approval, Workflow, Memory, Policy. |
-| `SF-004` | `NOT_STARTED` | `SF-003` | Decide naming strategy: keep `Sandbox` internally and add factory-level concepts above it. |
-| `SF-005` | `NOT_STARTED` | `SF-003` | Draft architecture decision record for integrated product over plugin substrate. |
+| `SF-000` | `DONE` | None | Decide product positioning: self-hostable software factory for safe, auditable coding agents. |
+| `SF-001` | `DONE` | `SF-000` | Define MVP promise: API or GitHub task in, isolated agent run, diff or PR artifacts out. |
+| `SF-002` | `DONE` | `SF-000` | Define non-goals for first release: multi-agent swarms, advanced memory, arbitrary storage plugins, and complex workflow DSL. |
+| `SF-003` | `DONE` | `SF-000` | Define product glossary: WorkItem, AgentRun, Sandbox, Command, Artifact, Approval, Workflow, Memory, Policy. |
+| `SF-004` | `DONE` | `SF-003` | Decide naming strategy: keep `Sandbox` internally and add factory-level concepts above it. |
+| `SF-005` | `DONE` | `SF-003` | Draft architecture decision record for integrated product over plugin substrate. |
 
 Acceptance criteria:
 
@@ -81,14 +81,14 @@ Acceptance criteria:
 
 | ID | State | Depends On | Task |
 |---|---|---|---|
-| `SF-010` | `NOT_STARTED` | `SF-003` | Add a factory architecture document covering domain model, plugin seams, APIs, events, and security model. |
-| `SF-011` | `NOT_STARTED` | `SF-010` | Define stable state machines for WorkItem and AgentRun. |
-| `SF-012` | `NOT_STARTED` | `SF-010` | Define factory-level event taxonomy. |
-| `SF-013` | `NOT_STARTED` | `SF-010` | Define artifact taxonomy: patch, diff, summary, test report, log bundle, PR, commit, screenshot, and SARIF. |
-| `SF-014` | `NOT_STARTED` | `SF-010` | Define plugin categories: compute, harness, integration, artifact, memory, secrets, and policy. |
-| `SF-015` | `NOT_STARTED` | `SF-014` | Decide which plugin categories are public in MVP: compute and harness only. |
-| `SF-016` | `NOT_STARTED` | `SF-010` | Define compatibility and versioning policy for factory APIs and harness plugin APIs. |
-| `SF-017` | `NOT_STARTED` | `SF-010` | Define minimum audit fields: actor, source, correlation ID, work item ID, run ID, sandbox ID, and command ID. |
+| `SF-010` | `DONE` | `SF-003` | Add a factory architecture document covering domain model, plugin seams, APIs, events, and security model. |
+| `SF-011` | `DONE` | `SF-010` | Define stable state machines for WorkItem and AgentRun. |
+| `SF-012` | `DONE` | `SF-010` | Define factory-level event taxonomy. |
+| `SF-013` | `DONE` | `SF-010` | Define artifact taxonomy: patch, diff, summary, test report, log bundle, PR, commit, screenshot, and SARIF. |
+| `SF-014` | `DONE` | `SF-010` | Define plugin categories: compute, harness, integration, artifact, memory, secrets, and policy. |
+| `SF-015` | `DONE` | `SF-014` | Decide which plugin categories are public in MVP: compute and harness only. |
+| `SF-016` | `DONE` | `SF-010` | Define compatibility and versioning policy for factory APIs and harness plugin APIs. |
+| `SF-017` | `DONE` | `SF-010` | Define minimum audit fields: actor, source, correlation ID, work item ID, run ID, sandbox ID, and command ID. |
 
 Acceptance criteria:
 
