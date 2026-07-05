@@ -69,15 +69,18 @@ func (s *MemoryStore) CreateSandbox(_ context.Context, in SandboxCreate) (model.
 	return sb, sess, nil
 }
 
-func (s *MemoryStore) ListSandboxes(_ context.Context) ([]model.Sandbox, error) {
+func (s *MemoryStore) ListSandboxes(_ context.Context, opts SandboxListOptions) ([]model.Sandbox, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]model.Sandbox, 0, len(s.sandboxes))
 	for _, sb := range s.sandboxes {
+		if opts.State != "" && sb.State != opts.State {
+			continue
+		}
 		out = append(out, sb)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].InsertedAt.After(out[j].InsertedAt) })
-	return out, nil
+	return pageSlice(out, opts.Page), nil
 }
 
 func (s *MemoryStore) GetSandbox(_ context.Context, sandboxID string) (model.Sandbox, error) {
@@ -259,7 +262,7 @@ func (s *MemoryStore) CreateCommand(_ context.Context, sandboxID string, in Comm
 	return cmd, nil
 }
 
-func (s *MemoryStore) ListCommands(_ context.Context, sandboxID string) ([]model.Command, error) {
+func (s *MemoryStore) ListCommands(_ context.Context, sandboxID string, opts CommandListOptions) ([]model.Command, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.sandboxes[sandboxID]; !ok {
@@ -267,10 +270,13 @@ func (s *MemoryStore) ListCommands(_ context.Context, sandboxID string) ([]model
 	}
 	out := []model.Command{}
 	for _, cmd := range s.commands[sandboxID] {
+		if opts.State != "" && cmd.State != opts.State {
+			continue
+		}
 		out = append(out, cmd)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].InsertedAt.Before(out[j].InsertedAt) })
-	return out, nil
+	return pageSlice(out, opts.Page), nil
 }
 
 func (s *MemoryStore) GetCommand(_ context.Context, sandboxID, commandID string) (model.Command, error) {
@@ -303,22 +309,22 @@ func (s *MemoryStore) AppendEvent(_ context.Context, sandboxID, commandID, sourc
 	return s.appendEventLocked(sandboxID, commandID, source, eventType, data), nil
 }
 
-func (s *MemoryStore) ListSandboxEvents(_ context.Context, sandboxID string, after int64) ([]model.Event, int64, error) {
+func (s *MemoryStore) ListSandboxEvents(_ context.Context, sandboxID string, opts EventListOptions) ([]model.Event, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.sandboxes[sandboxID]; !ok {
-		return nil, after, ErrSandboxNotFound
+		return nil, opts.After, ErrSandboxNotFound
 	}
-	return filterEvents(s.events[sandboxID], "", after, false)
+	return filterEvents(s.events[sandboxID], "", opts, false)
 }
 
-func (s *MemoryStore) ListCommandEvents(_ context.Context, sandboxID, commandID string, after int64) ([]model.Event, int64, error) {
+func (s *MemoryStore) ListCommandEvents(_ context.Context, sandboxID, commandID string, opts EventListOptions) ([]model.Event, int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.commands[sandboxID][commandID]; !ok {
-		return nil, after, ErrCommandNotFound
+		return nil, opts.After, ErrCommandNotFound
 	}
-	return filterEvents(s.events[sandboxID], commandID, after, true)
+	return filterEvents(s.events[sandboxID], commandID, opts, true)
 }
 
 func (s *MemoryStore) RememberIdempotencyKey(_ context.Context, key, value string) (string, bool, error) {
@@ -338,11 +344,11 @@ func (s *MemoryStore) appendEventLocked(sandboxID, commandID, source, eventType 
 	return ev
 }
 
-func filterEvents(events []model.Event, commandID string, after int64, commandOnly bool) ([]model.Event, int64, error) {
+func filterEvents(events []model.Event, commandID string, opts EventListOptions, commandOnly bool) ([]model.Event, int64, error) {
 	out := []model.Event{}
-	next := after
+	next := opts.After
 	for _, ev := range events {
-		if ev.Seq <= after {
+		if ev.Seq <= opts.After {
 			continue
 		}
 		if commandOnly && ev.CommandID != commandID {
@@ -352,8 +358,24 @@ func filterEvents(events []model.Event, commandID string, after int64, commandOn
 		if ev.Seq > next {
 			next = ev.Seq
 		}
+		if opts.Limit > 0 && len(out) >= opts.Limit {
+			break
+		}
 	}
 	return out, next, nil
+}
+
+func pageSlice[T any](in []T, page Page) []T {
+	if page.Offset > 0 {
+		if page.Offset >= len(in) {
+			return []T{}
+		}
+		in = in[page.Offset:]
+	}
+	if page.Limit > 0 && page.Limit < len(in) {
+		return in[:page.Limit]
+	}
+	return in
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

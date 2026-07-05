@@ -99,6 +99,12 @@ Core endpoints:
 - `GET /v1/sandboxes/{sandbox_id}/commands/{command_id}/events?after=N`
 - `GET /v1/client/connect` — WebSocket endpoint for `shed client`.
 
+List endpoints support bounded pagination where applicable:
+
+- `GET /v1/sandboxes?limit=N&offset=N&state=ready`
+- `GET /v1/sandboxes/{sandbox_id}/commands?limit=N&offset=N&state=running`
+- event endpoints support `limit=N` in addition to `after=N`.
+
 All JSON errors use a stable machine-readable shape:
 
 ```json

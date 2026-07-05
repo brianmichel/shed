@@ -194,7 +194,7 @@ func TestCreateSandboxAllocationFailureMarksSandboxFailed(t *testing.T) {
 	if got.State != model.SandboxFailed {
 		t.Fatalf("state=%s want %s", got.State, model.SandboxFailed)
 	}
-	events, _, eventErr := st.ListSandboxEvents(ctx, sb.ID, 0)
+	events, _, eventErr := st.ListSandboxEvents(ctx, sb.ID, store.EventListOptions{})
 	if eventErr != nil {
 		t.Fatal(eventErr)
 	}
@@ -230,7 +230,7 @@ func TestCreateCommandFallsBackToComputeExec(t *testing.T) {
 	}
 	var cmds []model.Command
 	for i := 0; i < 50; i++ {
-		cmds, err = st.ListCommands(ctx, sb.ID)
+		cmds, err = st.ListCommands(ctx, sb.ID, store.CommandListOptions{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -242,7 +242,7 @@ func TestCreateCommandFallsBackToComputeExec(t *testing.T) {
 	if len(cmds) != 1 || cmds[0].State != model.CommandExited {
 		t.Fatalf("commands=%#v", cmds)
 	}
-	events, _, err := st.ListCommandEvents(ctx, sb.ID, cmds[0].ID, 0)
+	events, _, err := st.ListCommandEvents(ctx, sb.ID, cmds[0].ID, store.EventListOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

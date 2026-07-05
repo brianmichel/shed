@@ -161,7 +161,7 @@ func (s *Server) leaseSweeper(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			sandboxes, err := s.store.ListSandboxes(ctx)
+			sandboxes, err := s.store.ListSandboxes(ctx, store.SandboxListOptions{})
 			if err != nil {
 				continue
 			}
@@ -268,7 +268,7 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": redactSandbox(sb), "client_session": redactSession(sess), "agent_token": sess.AgentToken, "connect_url": s.ClientURL()})
 }
 func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
-	xs, err := s.store.ListSandboxes(r.Context())
+	xs, err := s.store.ListSandboxes(r.Context(), store.SandboxListOptions{Page: parsePage(r), State: model.SandboxState(r.URL.Query().Get("state"))})
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -330,8 +330,7 @@ func (s *Server) extendLease(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, 200, map[string]any{"data": lease})
 }
 func (s *Server) sandboxEvents(w http.ResponseWriter, r *http.Request) {
-	after := parseAfter(r)
-	events, next, err := s.store.ListSandboxEvents(r.Context(), r.PathValue("sandbox_id"), after)
+	events, next, err := s.store.ListSandboxEvents(r.Context(), r.PathValue("sandbox_id"), parseEventListOptions(r))
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -449,7 +448,7 @@ func (s *Server) execViaCompute(ctx context.Context, sb model.Sandbox, cmd model
 }
 
 func (s *Server) listCommands(w http.ResponseWriter, r *http.Request) {
-	xs, err := s.store.ListCommands(r.Context(), r.PathValue("sandbox_id"))
+	xs, err := s.store.ListCommands(r.Context(), r.PathValue("sandbox_id"), store.CommandListOptions{Page: parsePage(r), State: model.CommandState(r.URL.Query().Get("state"))})
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -485,7 +484,7 @@ func (s *Server) killCommand(w http.ResponseWriter, r *http.Request) {
 	s.dispatchCommandControl(w, r, "command.kill", map[string]any{"command_id": r.PathValue("command_id")})
 }
 func (s *Server) commandEvents(w http.ResponseWriter, r *http.Request) {
-	events, next, err := s.store.ListCommandEvents(r.Context(), r.PathValue("sandbox_id"), r.PathValue("command_id"), parseAfter(r))
+	events, next, err := s.store.ListCommandEvents(r.Context(), r.PathValue("sandbox_id"), r.PathValue("command_id"), parseEventListOptions(r))
 	if err != nil {
 		writeStoreErr(w, err)
 		return
@@ -762,6 +761,26 @@ func parseAfter(r *http.Request) int64 {
 	n, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	return n
 }
+
+func parsePage(r *http.Request) store.Page {
+	return store.Page{Limit: parseBoundedInt(r, "limit", 0, 500), Offset: parseBoundedInt(r, "offset", 0, 0)}
+}
+
+func parseEventListOptions(r *http.Request) store.EventListOptions {
+	return store.EventListOptions{After: parseAfter(r), Limit: parseBoundedInt(r, "limit", 0, 1000)}
+}
+
+func parseBoundedInt(r *http.Request, key string, def, max int) int {
+	n, err := strconv.Atoi(r.URL.Query().Get(key))
+	if err != nil || n < 0 {
+		return def
+	}
+	if max > 0 && n > max {
+		return max
+	}
+	return n
+}
+
 func writeEvents(w http.ResponseWriter, r *http.Request, events []model.Event, next int64) {
 	if r.Header.Get("Accept") == "text/event-stream" {
 		w.Header().Set("Content-Type", "text/event-stream")

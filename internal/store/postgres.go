@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/brianmichel/shed/internal/model"
@@ -67,8 +68,16 @@ func (s *PostgresStore) CreateSandbox(ctx context.Context, in SandboxCreate) (mo
 	return sb, sess, nil
 }
 
-func (s *PostgresStore) ListSandboxes(ctx context.Context) ([]model.Sandbox, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, environment, template, state, compute, compute_api_version, compute_plugin_version, external_allocation_id, compute_config, compute_metadata, metadata, capabilities, lease_ttl_ms, lease_expires_at, inserted_at, updated_at FROM sandboxes ORDER BY inserted_at DESC`)
+func (s *PostgresStore) ListSandboxes(ctx context.Context, opts SandboxListOptions) ([]model.Sandbox, error) {
+	query := `SELECT id, environment, template, state, compute, compute_api_version, compute_plugin_version, external_allocation_id, compute_config, compute_metadata, metadata, capabilities, lease_ttl_ms, lease_expires_at, inserted_at, updated_at FROM sandboxes`
+	args := []any{}
+	if opts.State != "" {
+		args = append(args, opts.State)
+		query += fmt.Sprintf(" WHERE state = $%d", len(args))
+	}
+	query += " ORDER BY inserted_at DESC"
+	query, args = appendPage(query, args, opts.Page)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -278,11 +287,19 @@ func (s *PostgresStore) CreateCommand(ctx context.Context, sandboxID string, in 
 	return cmd, err
 }
 
-func (s *PostgresStore) ListCommands(ctx context.Context, sandboxID string) ([]model.Command, error) {
+func (s *PostgresStore) ListCommands(ctx context.Context, sandboxID string, opts CommandListOptions) ([]model.Command, error) {
 	if _, err := s.GetSandbox(ctx, sandboxID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, sandbox_id, state, command, cwd, env, stdin, timeout_ms, metadata, pid, exit_code, signal, started_at, completed_at, inserted_at, updated_at FROM commands WHERE sandbox_id = $1 ORDER BY inserted_at ASC`, sandboxID)
+	query := `SELECT id, sandbox_id, state, command, cwd, env, stdin, timeout_ms, metadata, pid, exit_code, signal, started_at, completed_at, inserted_at, updated_at FROM commands WHERE sandbox_id = $1`
+	args := []any{sandboxID}
+	if opts.State != "" {
+		args = append(args, opts.State)
+		query += fmt.Sprintf(" AND state = $%d", len(args))
+	}
+	query += " ORDER BY inserted_at ASC"
+	query, args = appendPage(query, args, opts.Page)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -333,18 +350,18 @@ func (s *PostgresStore) AppendEvent(ctx context.Context, sandboxID, commandID, s
 	return ev, err
 }
 
-func (s *PostgresStore) ListSandboxEvents(ctx context.Context, sandboxID string, after int64) ([]model.Event, int64, error) {
+func (s *PostgresStore) ListSandboxEvents(ctx context.Context, sandboxID string, opts EventListOptions) ([]model.Event, int64, error) {
 	if _, err := s.GetSandbox(ctx, sandboxID); err != nil {
-		return nil, after, err
+		return nil, opts.After, err
 	}
-	return s.listEvents(ctx, `SELECT id, sandbox_id, command_id, seq, type, source, timestamp, data FROM events WHERE sandbox_id = $1 AND seq > $2 ORDER BY seq ASC`, sandboxID, "", after)
+	return s.listEvents(ctx, `SELECT id, sandbox_id, command_id, seq, type, source, timestamp, data FROM events WHERE sandbox_id = $1 AND seq > $2 ORDER BY seq ASC`, sandboxID, "", opts)
 }
 
-func (s *PostgresStore) ListCommandEvents(ctx context.Context, sandboxID, commandID string, after int64) ([]model.Event, int64, error) {
+func (s *PostgresStore) ListCommandEvents(ctx context.Context, sandboxID, commandID string, opts EventListOptions) ([]model.Event, int64, error) {
 	if _, err := s.GetCommand(ctx, sandboxID, commandID); err != nil {
-		return nil, after, err
+		return nil, opts.After, err
 	}
-	return s.listEvents(ctx, `SELECT id, sandbox_id, command_id, seq, type, source, timestamp, data FROM events WHERE sandbox_id = $1 AND command_id = $2 AND seq > $3 ORDER BY seq ASC`, sandboxID, commandID, after)
+	return s.listEvents(ctx, `SELECT id, sandbox_id, command_id, seq, type, source, timestamp, data FROM events WHERE sandbox_id = $1 AND command_id = $2 AND seq > $3 ORDER BY seq ASC`, sandboxID, commandID, opts)
 }
 
 func (s *PostgresStore) RememberIdempotencyKey(ctx context.Context, key, value string) (string, bool, error) {
@@ -393,24 +410,28 @@ func (s *PostgresStore) appendEventTx(ctx context.Context, tx *sql.Tx, sandboxID
 	return ev, nil
 }
 
-func (s *PostgresStore) listEvents(ctx context.Context, query, sandboxID, commandID string, after int64) ([]model.Event, int64, error) {
+func (s *PostgresStore) listEvents(ctx context.Context, query, sandboxID, commandID string, opts EventListOptions) ([]model.Event, int64, error) {
 	var rows *sql.Rows
 	var err error
 	if commandID == "" {
-		rows, err = s.db.QueryContext(ctx, query, sandboxID, after)
+		args := []any{sandboxID, opts.After}
+		query, args = appendLimit(query, args, opts.Limit)
+		rows, err = s.db.QueryContext(ctx, query, args...)
 	} else {
-		rows, err = s.db.QueryContext(ctx, query, sandboxID, commandID, after)
+		args := []any{sandboxID, commandID, opts.After}
+		query, args = appendLimit(query, args, opts.Limit)
+		rows, err = s.db.QueryContext(ctx, query, args...)
 	}
 	if err != nil {
-		return nil, after, err
+		return nil, opts.After, err
 	}
 	defer rows.Close()
 	out := []model.Event{}
-	next := after
+	next := opts.After
 	for rows.Next() {
 		ev, err := scanEvent(rows)
 		if err != nil {
-			return nil, after, err
+			return nil, opts.After, err
 		}
 		out = append(out, ev)
 		if ev.Seq > next {
@@ -418,6 +439,26 @@ func (s *PostgresStore) listEvents(ctx context.Context, query, sandboxID, comman
 		}
 	}
 	return out, next, rows.Err()
+}
+
+func appendPage(query string, args []any, page Page) (string, []any) {
+	query, args = appendLimit(query, args, page.Limit)
+	if page.Offset > 0 {
+		args = append(args, page.Offset)
+		query += fmt.Sprintf(" OFFSET $%d", len(args))
+	}
+	return query, args
+}
+
+func appendLimit(query string, args []any, limit int) (string, []any) {
+	if limit <= 0 {
+		return query, args
+	}
+	args = append(args, limit)
+	if strings.Contains(query, " LIMIT ") {
+		return query, args
+	}
+	return query + fmt.Sprintf(" LIMIT $%d", len(args)), args
 }
 
 type rowScanner interface {

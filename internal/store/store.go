@@ -44,9 +44,29 @@ type APITokenCreateResult struct {
 	Secret string
 }
 
+type Page struct {
+	Limit  int
+	Offset int
+}
+
+type SandboxListOptions struct {
+	Page  Page
+	State model.SandboxState
+}
+
+type CommandListOptions struct {
+	Page  Page
+	State model.CommandState
+}
+
+type EventListOptions struct {
+	After int64
+	Limit int
+}
+
 type Store interface {
 	CreateSandbox(ctx context.Context, in SandboxCreate) (model.Sandbox, model.ClientSession, error)
-	ListSandboxes(ctx context.Context) ([]model.Sandbox, error)
+	ListSandboxes(ctx context.Context, opts SandboxListOptions) ([]model.Sandbox, error)
 	GetSandbox(ctx context.Context, sandboxID string) (model.Sandbox, error)
 	UpdateSandboxState(ctx context.Context, sandboxID string, state model.SandboxState) (model.Sandbox, error)
 	UpdateSandboxAllocation(ctx context.Context, sandboxID string, in SandboxAllocationUpdate) (model.Sandbox, error)
@@ -62,13 +82,13 @@ type Store interface {
 	AuthenticateAPIToken(ctx context.Context, token string) (model.APIToken, error)
 
 	CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error)
-	ListCommands(ctx context.Context, sandboxID string) ([]model.Command, error)
+	ListCommands(ctx context.Context, sandboxID string, opts CommandListOptions) ([]model.Command, error)
 	GetCommand(ctx context.Context, sandboxID, commandID string) (model.Command, error)
 	UpdateCommand(ctx context.Context, command model.Command) (model.Command, error)
 
 	AppendEvent(ctx context.Context, sandboxID, commandID, source, eventType string, data map[string]any) (model.Event, error)
-	ListSandboxEvents(ctx context.Context, sandboxID string, after int64) ([]model.Event, int64, error)
-	ListCommandEvents(ctx context.Context, sandboxID, commandID string, after int64) ([]model.Event, int64, error)
+	ListSandboxEvents(ctx context.Context, sandboxID string, opts EventListOptions) ([]model.Event, int64, error)
+	ListCommandEvents(ctx context.Context, sandboxID, commandID string, opts EventListOptions) ([]model.Event, int64, error)
 
 	RememberIdempotencyKey(ctx context.Context, key, value string) (string, bool, error)
 }
