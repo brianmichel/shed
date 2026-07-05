@@ -197,6 +197,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/agent-runs", s.listAgentRuns)
 	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}", s.getAgentRun)
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/cancel", s.cancelAgentRun)
+	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}/events", s.agentRunEvents)
 	s.mux.HandleFunc("GET /v1/sandboxes", s.listSandboxes)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.createSandbox)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}", s.getSandbox)
@@ -344,6 +345,24 @@ func (s *Server) cancelAgentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.WriteJSON(w, 200, map[string]any{"data": run})
+}
+
+func (s *Server) agentRunEvents(w http.ResponseWriter, r *http.Request) {
+	run, err := s.store.GetAgentRun(r.Context(), r.PathValue("agent_run_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	if run.SandboxID == "" {
+		writeEvents(w, r, nil, parseAfter(r))
+		return
+	}
+	events, next, err := s.store.ListSandboxEvents(r.Context(), run.SandboxID, parseEventListOptions(r))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeEvents(w, r, events, next)
 }
 
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {

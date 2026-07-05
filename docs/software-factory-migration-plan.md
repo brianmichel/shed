@@ -128,7 +128,7 @@ Acceptance criteria:
 | `SF-036` | `NOT_STARTED` | `SF-032` | Add factory-level events for agent run lifecycle. |
 | `SF-037` | `DONE` | `SF-030` | Add API endpoints for creating, listing, reading, and cancelling work items. |
 | `SF-038` | `DONE` | `SF-032` | Add API endpoints for creating, listing, reading, and cancelling agent runs. |
-| `SF-039` | `NOT_STARTED` | `SF-038` | Add run-level event replay endpoint. |
+| `SF-039` | `DONE` | `SF-038` | Add run-level event replay endpoint. |
 
 Acceptance criteria:
 

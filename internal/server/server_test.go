@@ -167,6 +167,25 @@ func TestAgentRunAPI(t *testing.T) {
 	if cancelled.Data.State != model.AgentRunCancelled || cancelled.Data.CompletedAt == nil {
 		t.Fatalf("cancelled agent run=%#v", cancelled.Data)
 	}
+
+	eventsReq := httptest.NewRequest(http.MethodGet, "/v1/agent-runs/"+created.Data.ID+"/events?after=7", nil)
+	eventsReq.Header.Set("Authorization", "Bearer api-secret")
+	eventsReq.SetPathValue("agent_run_id", created.Data.ID)
+	events := httptest.NewRecorder()
+	srv.ServeHTTP(events, eventsReq)
+	if events.Code != http.StatusOK {
+		t.Fatalf("events status=%d body=%s", events.Code, events.Body.String())
+	}
+	var replay struct {
+		Data       []model.Event `json:"data"`
+		NextCursor int64         `json:"next_cursor"`
+	}
+	if err := json.NewDecoder(events.Body).Decode(&replay); err != nil {
+		t.Fatal(err)
+	}
+	if len(replay.Data) != 0 || replay.NextCursor != 7 {
+		t.Fatalf("replay=%#v, want empty at cursor 7", replay)
+	}
 }
 
 func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
