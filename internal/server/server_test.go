@@ -33,6 +33,71 @@ func TestAPIRequiresBearerToken(t *testing.T) {
 	}
 }
 
+func TestWorkItemAPI(t *testing.T) {
+	srv := New(Config{APIToken: "api-secret"}, store.NewMemoryStore())
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/work-items", strings.NewReader(`{"title":"Fix bug","source_type":"api","actor":"tester","metadata":{"repo":"shed"}}`))
+	createReq.Header.Set("Authorization", "Bearer api-secret")
+	create := httptest.NewRecorder()
+	srv.ServeHTTP(create, createReq)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Data model.WorkItem `json:"data"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Data.ID == "" || created.Data.State != model.WorkItemQueued {
+		t.Fatalf("created work item=%#v", created.Data)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/work-items/"+created.Data.ID, nil)
+	getReq.Header.Set("Authorization", "Bearer api-secret")
+	getReq.SetPathValue("work_item_id", created.Data.ID)
+	get := httptest.NewRecorder()
+	srv.ServeHTTP(get, getReq)
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", get.Code, get.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/work-items?state=queued&limit=1", nil)
+	listReq.Header.Set("Authorization", "Bearer api-secret")
+	list := httptest.NewRecorder()
+	srv.ServeHTTP(list, listReq)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	var listed struct {
+		Data []model.WorkItem `json:"data"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Data) != 1 || listed.Data[0].ID != created.Data.ID {
+		t.Fatalf("listed work items=%#v", listed.Data)
+	}
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/v1/work-items/"+created.Data.ID+"/cancel", nil)
+	cancelReq.Header.Set("Authorization", "Bearer api-secret")
+	cancelReq.SetPathValue("work_item_id", created.Data.ID)
+	cancel := httptest.NewRecorder()
+	srv.ServeHTTP(cancel, cancelReq)
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+	var cancelled struct {
+		Data model.WorkItem `json:"data"`
+	}
+	if err := json.NewDecoder(cancel.Body).Decode(&cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Data.State != model.WorkItemCancelled {
+		t.Fatalf("cancelled state=%s", cancelled.Data.State)
+	}
+}
+
 func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()

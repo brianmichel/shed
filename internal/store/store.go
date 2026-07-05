@@ -34,6 +34,21 @@ type CommandCreate struct {
 	Metadata  map[string]string
 }
 
+type WorkItemCreate struct {
+	Title       string
+	Description string
+	SourceType  string
+	SourceID    string
+	Actor       string
+	Priority    int
+	Metadata    map[string]string
+}
+
+type WorkItemListOptions struct {
+	Page  Page
+	State model.WorkItemState
+}
+
 type APITokenCreate struct {
 	Name     string
 	Metadata map[string]string
@@ -80,6 +95,11 @@ type Store interface {
 	CreateAPIToken(ctx context.Context, in APITokenCreate) (APITokenCreateResult, error)
 	ListAPITokens(ctx context.Context) ([]model.APIToken, error)
 	AuthenticateAPIToken(ctx context.Context, token string) (model.APIToken, error)
+
+	CreateWorkItem(ctx context.Context, in WorkItemCreate) (model.WorkItem, error)
+	ListWorkItems(ctx context.Context, opts WorkItemListOptions) ([]model.WorkItem, error)
+	GetWorkItem(ctx context.Context, workItemID string) (model.WorkItem, error)
+	UpdateWorkItemState(ctx context.Context, workItemID string, state model.WorkItemState) (model.WorkItem, error)
 
 	CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error)
 	ListCommands(ctx context.Context, sandboxID string, opts CommandListOptions) ([]model.Command, error)

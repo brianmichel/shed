@@ -81,6 +81,10 @@ Core endpoints:
 - `GET /v1/api-tokens`
 - `POST /v1/api-tokens` — issue a new customer-facing API token.
 - `GET /v1/compute/drivers` — list registered compute drivers, server-side configuration, and plugin metadata.
+- `POST /v1/work-items` — create a factory-level unit of requested work.
+- `GET /v1/work-items`
+- `GET /v1/work-items/{work_item_id}`
+- `POST /v1/work-items/{work_item_id}/cancel`
 - `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, and call the selected compute driver.
 - `GET /v1/sandboxes`
 - `GET /v1/sandboxes/{sandbox_id}`

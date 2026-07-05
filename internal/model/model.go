@@ -36,6 +36,17 @@ const (
 	CommandFailed     CommandState = "failed"
 )
 
+type WorkItemState string
+
+const (
+	WorkItemQueued             WorkItemState = "queued"
+	WorkItemRunning            WorkItemState = "running"
+	WorkItemWaitingForApproval WorkItemState = "waiting_for_approval"
+	WorkItemCompleted          WorkItemState = "completed"
+	WorkItemFailed             WorkItemState = "failed"
+	WorkItemCancelled          WorkItemState = "cancelled"
+)
+
 type Lease struct {
 	TTLMillis int64     `json:"ttl_ms"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -80,6 +91,20 @@ type APIToken struct {
 	TokenPrefix string            `json:"token_prefix"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
 	LastUsedAt  *time.Time        `json:"last_used_at,omitempty"`
+	InsertedAt  time.Time         `json:"inserted_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+type WorkItem struct {
+	ID          string            `json:"id"`
+	Title       string            `json:"title"`
+	Description string            `json:"description,omitempty"`
+	SourceType  string            `json:"source_type,omitempty"`
+	SourceID    string            `json:"source_id,omitempty"`
+	Actor       string            `json:"actor,omitempty"`
+	State       WorkItemState     `json:"state"`
+	Priority    int               `json:"priority,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
 	InsertedAt  time.Time         `json:"inserted_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
 }

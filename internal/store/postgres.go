@@ -261,6 +261,54 @@ func (s *PostgresStore) AuthenticateAPIToken(ctx context.Context, token string) 
 	return tok, err
 }
 
+func (s *PostgresStore) CreateWorkItem(ctx context.Context, in WorkItemCreate) (model.WorkItem, error) {
+	now := time.Now().UTC()
+	item := model.WorkItem{ID: newID("work"), Title: in.Title, Description: in.Description, SourceType: in.SourceType, SourceID: in.SourceID, Actor: in.Actor, State: model.WorkItemQueued, Priority: in.Priority, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO work_items (id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, item.ID, item.Title, item.Description, item.SourceType, item.SourceID, item.Actor, item.State, item.Priority, jsonParam(item.Metadata), item.InsertedAt, item.UpdatedAt)
+	return item, err
+}
+
+func (s *PostgresStore) ListWorkItems(ctx context.Context, opts WorkItemListOptions) ([]model.WorkItem, error) {
+	query := `SELECT id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at FROM work_items`
+	args := []any{}
+	if opts.State != "" {
+		args = append(args, opts.State)
+		query += fmt.Sprintf(" WHERE state = $%d", len(args))
+	}
+	query += " ORDER BY inserted_at DESC"
+	query, args = appendPage(query, args, opts.Page)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.WorkItem{}
+	for rows.Next() {
+		item, err := scanWorkItem(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) GetWorkItem(ctx context.Context, workItemID string) (model.WorkItem, error) {
+	item, err := scanWorkItem(s.db.QueryRowContext(ctx, `SELECT id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at FROM work_items WHERE id = $1`, workItemID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.WorkItem{}, ErrWorkItemNotFound
+	}
+	return item, err
+}
+
+func (s *PostgresStore) UpdateWorkItemState(ctx context.Context, workItemID string, state model.WorkItemState) (model.WorkItem, error) {
+	item, err := scanWorkItem(s.db.QueryRowContext(ctx, `UPDATE work_items SET state = $2, updated_at = $3 WHERE id = $1 RETURNING id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at`, workItemID, state, time.Now().UTC()))
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.WorkItem{}, ErrWorkItemNotFound
+	}
+	return item, err
+}
+
 func (s *PostgresStore) CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error) {
 	now := time.Now().UTC()
 	if in.Cwd == "" {
@@ -552,6 +600,21 @@ func scanCommand(row rowScanner) (model.Command, error) {
 		return model.Command{}, err
 	}
 	return cmd, nil
+}
+
+func scanWorkItem(row rowScanner) (model.WorkItem, error) {
+	var item model.WorkItem
+	var state string
+	var metadata []byte
+	err := row.Scan(&item.ID, &item.Title, &item.Description, &item.SourceType, &item.SourceID, &item.Actor, &state, &item.Priority, &metadata, &item.InsertedAt, &item.UpdatedAt)
+	if err != nil {
+		return model.WorkItem{}, err
+	}
+	item.State = model.WorkItemState(state)
+	if err := scanJSON(metadata, &item.Metadata); err != nil {
+		return model.WorkItem{}, err
+	}
+	return item, nil
 }
 
 func scanEvent(row rowScanner) (model.Event, error) {

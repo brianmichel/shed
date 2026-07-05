@@ -15,11 +15,12 @@ import (
 )
 
 var (
-	ErrSandboxNotFound = errors.New("sandbox_not_found")
-	ErrSessionNotFound = errors.New("session_not_found")
-	ErrInvalidSession  = errors.New("invalid_session")
-	ErrInvalidAPIToken = errors.New("invalid_api_token")
-	ErrCommandNotFound = errors.New("command_not_found")
+	ErrSandboxNotFound  = errors.New("sandbox_not_found")
+	ErrSessionNotFound  = errors.New("session_not_found")
+	ErrInvalidSession   = errors.New("invalid_session")
+	ErrInvalidAPIToken  = errors.New("invalid_api_token")
+	ErrCommandNotFound  = errors.New("command_not_found")
+	ErrWorkItemNotFound = errors.New("work_item_not_found")
 )
 
 type MemoryStore struct {
@@ -28,6 +29,7 @@ type MemoryStore struct {
 	sessions    map[string]model.ClientSession
 	commands    map[string]map[string]model.Command
 	apiTokens   map[string]model.APIToken
+	workItems   map[string]model.WorkItem
 	events      map[string][]model.Event
 	nextSeq     map[string]int64
 	idempotency map[string]string
@@ -39,6 +41,7 @@ func NewMemoryStore() *MemoryStore {
 		sessions:    map[string]model.ClientSession{},
 		commands:    map[string]map[string]model.Command{},
 		apiTokens:   map[string]model.APIToken{},
+		workItems:   map[string]model.WorkItem{},
 		events:      map[string][]model.Event{},
 		nextSeq:     map[string]int64{},
 		idempotency: map[string]string{},
@@ -238,6 +241,52 @@ func (s *MemoryStore) AuthenticateAPIToken(_ context.Context, token string) (mod
 		}
 	}
 	return model.APIToken{}, ErrInvalidAPIToken
+}
+
+func (s *MemoryStore) CreateWorkItem(_ context.Context, in WorkItemCreate) (model.WorkItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	item := model.WorkItem{ID: newID("work"), Title: in.Title, Description: in.Description, SourceType: in.SourceType, SourceID: in.SourceID, Actor: in.Actor, State: model.WorkItemQueued, Priority: in.Priority, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	s.workItems[item.ID] = item
+	return item, nil
+}
+
+func (s *MemoryStore) ListWorkItems(_ context.Context, opts WorkItemListOptions) ([]model.WorkItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.WorkItem, 0, len(s.workItems))
+	for _, item := range s.workItems {
+		if opts.State != "" && item.State != opts.State {
+			continue
+		}
+		out = append(out, item)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InsertedAt.After(out[j].InsertedAt) })
+	return pageSlice(out, opts.Page), nil
+}
+
+func (s *MemoryStore) GetWorkItem(_ context.Context, workItemID string) (model.WorkItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.workItems[workItemID]
+	if !ok {
+		return model.WorkItem{}, ErrWorkItemNotFound
+	}
+	return item, nil
+}
+
+func (s *MemoryStore) UpdateWorkItemState(_ context.Context, workItemID string, state model.WorkItemState) (model.WorkItem, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	item, ok := s.workItems[workItemID]
+	if !ok {
+		return model.WorkItem{}, ErrWorkItemNotFound
+	}
+	item.State = state
+	item.UpdatedAt = time.Now().UTC()
+	s.workItems[workItemID] = item
+	return item, nil
 }
 
 func (s *MemoryStore) CreateCommand(_ context.Context, sandboxID string, in CommandCreate) (model.Command, error) {

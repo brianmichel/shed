@@ -188,6 +188,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/api-tokens", s.listAPITokens)
 	s.mux.HandleFunc("POST /v1/api-tokens", s.createAPIToken)
 	s.mux.HandleFunc("GET /v1/compute/drivers", s.listComputeDrivers)
+	s.mux.HandleFunc("GET /v1/work-items", s.listWorkItems)
+	s.mux.HandleFunc("POST /v1/work-items", s.createWorkItem)
+	s.mux.HandleFunc("GET /v1/work-items/{work_item_id}", s.getWorkItem)
+	s.mux.HandleFunc("POST /v1/work-items/{work_item_id}/cancel", s.cancelWorkItem)
 	s.mux.HandleFunc("GET /v1/sandboxes", s.listSandboxes)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.createSandbox)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}", s.getSandbox)
@@ -241,6 +245,47 @@ func (s *Server) createAPIToken(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listComputeDrivers(w http.ResponseWriter, r *http.Request) {
 	drivers := s.allocMgr.ListDrivers(r.Context())
 	api.WriteJSON(w, 200, map[string]any{"data": drivers, "default_driver": s.allocMgr.DefaultCompute()})
+}
+
+func (s *Server) createWorkItem(w http.ResponseWriter, r *http.Request) {
+	var in store.WorkItemCreate
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Title) == "" {
+		api.WriteError(w, 422, "invalid_request", "title is required", false)
+		return
+	}
+	item, err := s.store.CreateWorkItem(r.Context(), in)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": item})
+}
+
+func (s *Server) listWorkItems(w http.ResponseWriter, r *http.Request) {
+	items, err := s.store.ListWorkItems(r.Context(), store.WorkItemListOptions{Page: parsePage(r), State: model.WorkItemState(r.URL.Query().Get("state"))})
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": items})
+}
+
+func (s *Server) getWorkItem(w http.ResponseWriter, r *http.Request) {
+	item, err := s.store.GetWorkItem(r.Context(), r.PathValue("work_item_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": item})
+}
+
+func (s *Server) cancelWorkItem(w http.ResponseWriter, r *http.Request) {
+	item, err := s.store.UpdateWorkItemState(r.Context(), r.PathValue("work_item_id"), model.WorkItemCancelled)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": item})
 }
 
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
@@ -800,6 +845,8 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		api.WriteError(w, 404, "command_not_found", "Command not found", false)
 	case errors.Is(err, store.ErrSessionNotFound):
 		api.WriteError(w, 404, "session_not_found", "Session not found", false)
+	case errors.Is(err, store.ErrWorkItemNotFound):
+		api.WriteError(w, 404, "work_item_not_found", "Work item not found", false)
 	default:
 		api.WriteError(w, 422, err.Error(), "Request failed", false)
 	}
