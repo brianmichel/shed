@@ -59,6 +59,8 @@ Root `mise.toml` pins Go and defines repeatable tasks:
 - `mise run run:dev:once` — run dev mode once without hot reload
 - `mise run ui:check`
 
+Store contract tests always run against the memory store. To include Postgres migration and restart-recovery coverage, run tests with `SHED_TEST_POSTGRES_URL` pointing at a dedicated test database.
+
 ## Repository layout
 
 ```text

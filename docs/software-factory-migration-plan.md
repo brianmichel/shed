@@ -106,7 +106,7 @@ Acceptance criteria:
 | `SF-024` | `DONE` | `SF-022` | Add transactional event append with related state mutation. |
 | `SF-025` | `DONE` | `SF-022` | Add pagination and filtering support to store interfaces. |
 | `SF-026` | `DONE` | `SF-022` | Add durable idempotency for external create operations. |
-| `SF-027` | `NOT_STARTED` | `SF-022` | Add restart recovery tests for sandboxes, sessions, commands, and events. |
+| `SF-027` | `DONE` | `SF-022` | Add restart recovery tests for sandboxes, sessions, commands, and events. |
 | `SF-028` | `DONE` | `SF-022` | Add config flags and env vars for Postgres connection and store selection. |
 
 Acceptance criteria:
@@ -436,7 +436,7 @@ Acceptance criteria:
 
 | ID | State | Depends On | Task |
 |---|---|---|---|
-| `SF-200` | `NOT_STARTED` | `SF-020` | Add store contract tests that run against memory and Postgres. |
+| `SF-200` | `DONE` | `SF-020` | Add store contract tests that run against memory and Postgres. |
 | `SF-201` | `NOT_STARTED` | `SF-030` | Add WorkItem API tests. |
 | `SF-202` | `NOT_STARTED` | `SF-032` | Add AgentRun API tests. |
 | `SF-203` | `NOT_STARTED` | `SF-040` | Add scheduler recovery tests. |
