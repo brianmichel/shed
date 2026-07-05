@@ -93,6 +93,7 @@ func (s *Scheduler) processOne(ctx context.Context, run model.AgentRun) error {
 	if _, err := s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemRunning); err != nil {
 		return err
 	}
+	_, _ = s.store.AppendFactoryEvent(ctx, run.WorkItemID, run.ID, "server.scheduler", "agent_run.step.started", map[string]any{"step": "processor", "attempt": run.Attempt})
 	processCtx := ctx
 	var cancel context.CancelFunc
 	if s.cfg.RunTimeout > 0 {
@@ -129,6 +130,7 @@ func (s *Scheduler) processOne(ctx context.Context, run model.AgentRun) error {
 	if _, err := s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemCompleted); err != nil {
 		return err
 	}
+	_, _ = s.store.AppendFactoryEvent(ctx, run.WorkItemID, run.ID, "server.scheduler", "agent_run.step.completed", map[string]any{"step": "processor", "attempt": run.Attempt})
 	return nil
 }
 

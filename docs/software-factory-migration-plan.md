@@ -144,7 +144,7 @@ Acceptance criteria:
 | `SF-041` | `DONE` | `SF-040` | Implement run acquisition and locking to avoid duplicate workers. |
 | `SF-042` | `DONE` | `SF-040` | Implement run timeout and cancellation handling. |
 | `SF-043` | `DONE` | `SF-040` | Implement retry policy primitives. |
-| `SF-044` | `NOT_STARTED` | `SF-040` | Implement run step events. |
+| `SF-044` | `DONE` | `SF-040` | Implement run step events. |
 | `SF-045` | `NOT_STARTED` | `SF-040` | Add scheduler recovery after server restart. |
 | `SF-046` | `NOT_STARTED` | `SF-040` | Add single-node scheduler first and defer distributed scheduling. |
 

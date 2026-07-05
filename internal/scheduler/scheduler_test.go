@@ -51,6 +51,13 @@ func TestRunOnceCompletesQueuedAgentRun(t *testing.T) {
 	if updatedItem.State != model.WorkItemCompleted {
 		t.Fatalf("work item state=%s want completed", updatedItem.State)
 	}
+	events, _, err := st.ListAgentRunEvents(ctx, run.ID, store.EventListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEventType(events, "agent_run.step.started") || !hasEventType(events, "agent_run.step.completed") {
+		t.Fatalf("step events missing: %#v", events)
+	}
 }
 
 func TestRunOnceMarksFailureAndContinues(t *testing.T) {
@@ -87,13 +94,7 @@ func TestRunOnceMarksFailureAndContinues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var foundFailure bool
-	for _, ev := range events {
-		if ev.Type == "agent_run.processor.failed" {
-			foundFailure = true
-		}
-	}
-	if !foundFailure {
+	if !hasEventType(events, "agent_run.processor.failed") || !hasEventType(events, "agent_run.step.started") {
 		t.Fatalf("processor failure event missing: %#v", events)
 	}
 }
@@ -144,15 +145,18 @@ func TestRunOnceRetriesFailureBeforeFinalAttempt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var foundRetry bool
-	for _, ev := range events {
-		if ev.Type == "agent_run.processor.retry_scheduled" {
-			foundRetry = true
-		}
-	}
-	if !foundRetry {
+	if !hasEventType(events, "agent_run.processor.retry_scheduled") {
 		t.Fatalf("retry event missing: %#v", events)
 	}
+}
+
+func hasEventType(events []model.Event, eventType string) bool {
+	for _, ev := range events {
+		if ev.Type == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func TestRunOnceMarksTimeout(t *testing.T) {
