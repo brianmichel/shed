@@ -309,6 +309,84 @@ func (s *PostgresStore) UpdateWorkItemState(ctx context.Context, workItemID stri
 	return item, err
 }
 
+func (s *PostgresStore) CreateAgentRun(ctx context.Context, workItemID string, in AgentRunCreate) (model.AgentRun, error) {
+	now := time.Now().UTC()
+	run := model.AgentRun{ID: newID("run"), WorkItemID: workItemID, SandboxID: in.SandboxID, Harness: in.Harness, Model: in.Model, State: model.AgentRunQueued, Prompt: in.Prompt, Actor: in.Actor, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	var sandboxID any
+	if run.SandboxID != "" {
+		sandboxID = run.SandboxID
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO agent_runs (id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, run.ID, run.WorkItemID, sandboxID, run.Harness, run.Model, run.State, run.Prompt, run.Actor, jsonParam(run.Metadata), run.InsertedAt, run.UpdatedAt)
+	if err != nil {
+		if strings.Contains(err.Error(), "agent_runs_work_item_id_fkey") {
+			return model.AgentRun{}, ErrWorkItemNotFound
+		}
+		if strings.Contains(err.Error(), "agent_runs_sandbox_id_fkey") {
+			return model.AgentRun{}, ErrSandboxNotFound
+		}
+	}
+	return run, err
+}
+
+func (s *PostgresStore) ListAgentRuns(ctx context.Context, opts AgentRunListOptions) ([]model.AgentRun, error) {
+	query := `SELECT id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at FROM agent_runs`
+	where := []string{}
+	args := []any{}
+	if opts.WorkItemID != "" {
+		args = append(args, opts.WorkItemID)
+		where = append(where, fmt.Sprintf("work_item_id = $%d", len(args)))
+	}
+	if opts.State != "" {
+		args = append(args, opts.State)
+		where = append(where, fmt.Sprintf("state = $%d", len(args)))
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY inserted_at DESC"
+	query, args = appendPage(query, args, opts.Page)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.AgentRun{}
+	for rows.Next() {
+		run, err := scanAgentRun(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, run)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) GetAgentRun(ctx context.Context, agentRunID string) (model.AgentRun, error) {
+	run, err := scanAgentRun(s.db.QueryRowContext(ctx, `SELECT id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at FROM agent_runs WHERE id = $1`, agentRunID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AgentRun{}, ErrAgentRunNotFound
+	}
+	return run, err
+}
+
+func (s *PostgresStore) UpdateAgentRunState(ctx context.Context, agentRunID string, state model.AgentRunState) (model.AgentRun, error) {
+	now := time.Now().UTC()
+	query := `UPDATE agent_runs SET state = $2, updated_at = $3`
+	args := []any{agentRunID, state, now}
+	if state == model.AgentRunRunning {
+		query += `, started_at = COALESCE(started_at, $3)`
+	}
+	if isTerminalAgentRunState(state) {
+		query += `, completed_at = $3`
+	}
+	query += ` WHERE id = $1 RETURNING id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`
+	run, err := scanAgentRun(s.db.QueryRowContext(ctx, query, args...))
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.AgentRun{}, ErrAgentRunNotFound
+	}
+	return run, err
+}
+
 func (s *PostgresStore) CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error) {
 	now := time.Now().UTC()
 	if in.Cwd == "" {
@@ -615,6 +693,32 @@ func scanWorkItem(row rowScanner) (model.WorkItem, error) {
 		return model.WorkItem{}, err
 	}
 	return item, nil
+}
+
+func scanAgentRun(row rowScanner) (model.AgentRun, error) {
+	var run model.AgentRun
+	var sandboxID sql.NullString
+	var state string
+	var metadata []byte
+	var startedAt, completedAt sql.NullTime
+	err := row.Scan(&run.ID, &run.WorkItemID, &sandboxID, &run.Harness, &run.Model, &state, &run.Prompt, &run.Actor, &metadata, &startedAt, &completedAt, &run.InsertedAt, &run.UpdatedAt)
+	if err != nil {
+		return model.AgentRun{}, err
+	}
+	if sandboxID.Valid {
+		run.SandboxID = sandboxID.String
+	}
+	run.State = model.AgentRunState(state)
+	if startedAt.Valid {
+		run.StartedAt = &startedAt.Time
+	}
+	if completedAt.Valid {
+		run.CompletedAt = &completedAt.Time
+	}
+	if err := scanJSON(metadata, &run.Metadata); err != nil {
+		return model.AgentRun{}, err
+	}
+	return run, nil
 }
 
 func scanEvent(row rowScanner) (model.Event, error) {

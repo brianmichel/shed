@@ -21,6 +21,7 @@ var (
 	ErrInvalidAPIToken  = errors.New("invalid_api_token")
 	ErrCommandNotFound  = errors.New("command_not_found")
 	ErrWorkItemNotFound = errors.New("work_item_not_found")
+	ErrAgentRunNotFound = errors.New("agent_run_not_found")
 )
 
 type MemoryStore struct {
@@ -30,6 +31,7 @@ type MemoryStore struct {
 	commands    map[string]map[string]model.Command
 	apiTokens   map[string]model.APIToken
 	workItems   map[string]model.WorkItem
+	agentRuns   map[string]model.AgentRun
 	events      map[string][]model.Event
 	nextSeq     map[string]int64
 	idempotency map[string]string
@@ -42,6 +44,7 @@ func NewMemoryStore() *MemoryStore {
 		commands:    map[string]map[string]model.Command{},
 		apiTokens:   map[string]model.APIToken{},
 		workItems:   map[string]model.WorkItem{},
+		agentRuns:   map[string]model.AgentRun{},
 		events:      map[string][]model.Event{},
 		nextSeq:     map[string]int64{},
 		idempotency: map[string]string{},
@@ -289,6 +292,70 @@ func (s *MemoryStore) UpdateWorkItemState(_ context.Context, workItemID string, 
 	return item, nil
 }
 
+func (s *MemoryStore) CreateAgentRun(_ context.Context, workItemID string, in AgentRunCreate) (model.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.workItems[workItemID]; !ok {
+		return model.AgentRun{}, ErrWorkItemNotFound
+	}
+	if in.SandboxID != "" {
+		if _, ok := s.sandboxes[in.SandboxID]; !ok {
+			return model.AgentRun{}, ErrSandboxNotFound
+		}
+	}
+	now := time.Now().UTC()
+	run := model.AgentRun{ID: newID("run"), WorkItemID: workItemID, SandboxID: in.SandboxID, Harness: in.Harness, Model: in.Model, State: model.AgentRunQueued, Prompt: in.Prompt, Actor: in.Actor, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	s.agentRuns[run.ID] = run
+	return run, nil
+}
+
+func (s *MemoryStore) ListAgentRuns(_ context.Context, opts AgentRunListOptions) ([]model.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.AgentRun, 0, len(s.agentRuns))
+	for _, run := range s.agentRuns {
+		if opts.WorkItemID != "" && run.WorkItemID != opts.WorkItemID {
+			continue
+		}
+		if opts.State != "" && run.State != opts.State {
+			continue
+		}
+		out = append(out, run)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InsertedAt.After(out[j].InsertedAt) })
+	return pageSlice(out, opts.Page), nil
+}
+
+func (s *MemoryStore) GetAgentRun(_ context.Context, agentRunID string) (model.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, ok := s.agentRuns[agentRunID]
+	if !ok {
+		return model.AgentRun{}, ErrAgentRunNotFound
+	}
+	return run, nil
+}
+
+func (s *MemoryStore) UpdateAgentRunState(_ context.Context, agentRunID string, state model.AgentRunState) (model.AgentRun, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	run, ok := s.agentRuns[agentRunID]
+	if !ok {
+		return model.AgentRun{}, ErrAgentRunNotFound
+	}
+	now := time.Now().UTC()
+	run.State = state
+	run.UpdatedAt = now
+	if state == model.AgentRunRunning && run.StartedAt == nil {
+		run.StartedAt = &now
+	}
+	if isTerminalAgentRunState(state) {
+		run.CompletedAt = &now
+	}
+	s.agentRuns[agentRunID] = run
+	return run, nil
+}
+
 func (s *MemoryStore) CreateCommand(_ context.Context, sandboxID string, in CommandCreate) (model.Command, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -425,6 +492,10 @@ func pageSlice[T any](in []T, page Page) []T {
 		return in[:page.Limit]
 	}
 	return in
+}
+
+func isTerminalAgentRunState(state model.AgentRunState) bool {
+	return state == model.AgentRunCompleted || state == model.AgentRunFailed || state == model.AgentRunCancelled || state == model.AgentRunTimedOut
 }
 
 func cloneStringMap(in map[string]string) map[string]string {

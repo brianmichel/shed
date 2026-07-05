@@ -49,6 +49,21 @@ type WorkItemListOptions struct {
 	State model.WorkItemState
 }
 
+type AgentRunCreate struct {
+	SandboxID string
+	Harness   string
+	Model     string
+	Prompt    string
+	Actor     string
+	Metadata  map[string]string
+}
+
+type AgentRunListOptions struct {
+	Page       Page
+	State      model.AgentRunState
+	WorkItemID string
+}
+
 type APITokenCreate struct {
 	Name     string
 	Metadata map[string]string
@@ -100,6 +115,11 @@ type Store interface {
 	ListWorkItems(ctx context.Context, opts WorkItemListOptions) ([]model.WorkItem, error)
 	GetWorkItem(ctx context.Context, workItemID string) (model.WorkItem, error)
 	UpdateWorkItemState(ctx context.Context, workItemID string, state model.WorkItemState) (model.WorkItem, error)
+
+	CreateAgentRun(ctx context.Context, workItemID string, in AgentRunCreate) (model.AgentRun, error)
+	ListAgentRuns(ctx context.Context, opts AgentRunListOptions) ([]model.AgentRun, error)
+	GetAgentRun(ctx context.Context, agentRunID string) (model.AgentRun, error)
+	UpdateAgentRunState(ctx context.Context, agentRunID string, state model.AgentRunState) (model.AgentRun, error)
 
 	CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error)
 	ListCommands(ctx context.Context, sandboxID string, opts CommandListOptions) ([]model.Command, error)

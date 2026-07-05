@@ -85,6 +85,11 @@ Core endpoints:
 - `GET /v1/work-items`
 - `GET /v1/work-items/{work_item_id}`
 - `POST /v1/work-items/{work_item_id}/cancel`
+- `POST /v1/work-items/{work_item_id}/runs` — create an agent run for a work item.
+- `GET /v1/work-items/{work_item_id}/runs`
+- `GET /v1/agent-runs`
+- `GET /v1/agent-runs/{agent_run_id}`
+- `POST /v1/agent-runs/{agent_run_id}/cancel`
 - `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, and call the selected compute driver.
 - `GET /v1/sandboxes`
 - `GET /v1/sandboxes/{sandbox_id}`

@@ -98,6 +98,77 @@ func TestWorkItemAPI(t *testing.T) {
 	}
 }
 
+func TestAgentRunAPI(t *testing.T) {
+	srv := New(Config{APIToken: "api-secret"}, store.NewMemoryStore())
+	item, err := srv.store.CreateWorkItem(context.Background(), store.WorkItemCreate{Title: "Fix bug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/work-items/"+item.ID+"/runs", strings.NewReader(`{"harness":"shell","model":"local","prompt":"fix it","actor":"tester"}`))
+	createReq.Header.Set("Authorization", "Bearer api-secret")
+	createReq.SetPathValue("work_item_id", item.ID)
+	create := httptest.NewRecorder()
+	srv.ServeHTTP(create, createReq)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Data model.AgentRun `json:"data"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Data.ID == "" || created.Data.WorkItemID != item.ID || created.Data.State != model.AgentRunQueued {
+		t.Fatalf("created agent run=%#v", created.Data)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/agent-runs/"+created.Data.ID, nil)
+	getReq.Header.Set("Authorization", "Bearer api-secret")
+	getReq.SetPathValue("agent_run_id", created.Data.ID)
+	get := httptest.NewRecorder()
+	srv.ServeHTTP(get, getReq)
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", get.Code, get.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/work-items/"+item.ID+"/runs?state=queued", nil)
+	listReq.Header.Set("Authorization", "Bearer api-secret")
+	listReq.SetPathValue("work_item_id", item.ID)
+	list := httptest.NewRecorder()
+	srv.ServeHTTP(list, listReq)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	var listed struct {
+		Data []model.AgentRun `json:"data"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Data) != 1 || listed.Data[0].ID != created.Data.ID {
+		t.Fatalf("listed agent runs=%#v", listed.Data)
+	}
+
+	cancelReq := httptest.NewRequest(http.MethodPost, "/v1/agent-runs/"+created.Data.ID+"/cancel", nil)
+	cancelReq.Header.Set("Authorization", "Bearer api-secret")
+	cancelReq.SetPathValue("agent_run_id", created.Data.ID)
+	cancel := httptest.NewRecorder()
+	srv.ServeHTTP(cancel, cancelReq)
+	if cancel.Code != http.StatusOK {
+		t.Fatalf("cancel status=%d body=%s", cancel.Code, cancel.Body.String())
+	}
+	var cancelled struct {
+		Data model.AgentRun `json:"data"`
+	}
+	if err := json.NewDecoder(cancel.Body).Decode(&cancelled); err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.Data.State != model.AgentRunCancelled || cancelled.Data.CompletedAt == nil {
+		t.Fatalf("cancelled agent run=%#v", cancelled.Data)
+	}
+}
+
 func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()

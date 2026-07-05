@@ -192,6 +192,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/work-items", s.createWorkItem)
 	s.mux.HandleFunc("GET /v1/work-items/{work_item_id}", s.getWorkItem)
 	s.mux.HandleFunc("POST /v1/work-items/{work_item_id}/cancel", s.cancelWorkItem)
+	s.mux.HandleFunc("GET /v1/work-items/{work_item_id}/runs", s.listWorkItemAgentRuns)
+	s.mux.HandleFunc("POST /v1/work-items/{work_item_id}/runs", s.createAgentRun)
+	s.mux.HandleFunc("GET /v1/agent-runs", s.listAgentRuns)
+	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}", s.getAgentRun)
+	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/cancel", s.cancelAgentRun)
 	s.mux.HandleFunc("GET /v1/sandboxes", s.listSandboxes)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.createSandbox)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}", s.getSandbox)
@@ -286,6 +291,59 @@ func (s *Server) cancelWorkItem(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.WriteJSON(w, 200, map[string]any{"data": item})
+}
+
+func (s *Server) createAgentRun(w http.ResponseWriter, r *http.Request) {
+	var in store.AgentRunCreate
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		api.WriteError(w, 422, "invalid_request", "Request body must be valid JSON", false)
+		return
+	}
+	run, err := s.store.CreateAgentRun(r.Context(), r.PathValue("work_item_id"), in)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": run})
+}
+
+func (s *Server) listWorkItemAgentRuns(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.store.GetWorkItem(r.Context(), r.PathValue("work_item_id")); err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	s.listAgentRunsWithOptions(w, r, store.AgentRunListOptions{Page: parsePage(r), State: model.AgentRunState(r.URL.Query().Get("state")), WorkItemID: r.PathValue("work_item_id")})
+}
+
+func (s *Server) listAgentRuns(w http.ResponseWriter, r *http.Request) {
+	s.listAgentRunsWithOptions(w, r, store.AgentRunListOptions{Page: parsePage(r), State: model.AgentRunState(r.URL.Query().Get("state")), WorkItemID: r.URL.Query().Get("work_item_id")})
+}
+
+func (s *Server) listAgentRunsWithOptions(w http.ResponseWriter, r *http.Request, opts store.AgentRunListOptions) {
+	runs, err := s.store.ListAgentRuns(r.Context(), opts)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": runs})
+}
+
+func (s *Server) getAgentRun(w http.ResponseWriter, r *http.Request) {
+	run, err := s.store.GetAgentRun(r.Context(), r.PathValue("agent_run_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": run})
+}
+
+func (s *Server) cancelAgentRun(w http.ResponseWriter, r *http.Request) {
+	run, err := s.store.UpdateAgentRunState(r.Context(), r.PathValue("agent_run_id"), model.AgentRunCancelled)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": run})
 }
 
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
@@ -847,6 +905,8 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		api.WriteError(w, 404, "session_not_found", "Session not found", false)
 	case errors.Is(err, store.ErrWorkItemNotFound):
 		api.WriteError(w, 404, "work_item_not_found", "Work item not found", false)
+	case errors.Is(err, store.ErrAgentRunNotFound):
+		api.WriteError(w, 404, "agent_run_not_found", "Agent run not found", false)
 	default:
 		api.WriteError(w, 422, err.Error(), "Request failed", false)
 	}

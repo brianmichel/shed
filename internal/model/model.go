@@ -47,6 +47,21 @@ const (
 	WorkItemCancelled          WorkItemState = "cancelled"
 )
 
+type AgentRunState string
+
+const (
+	AgentRunQueued       AgentRunState = "queued"
+	AgentRunProvisioning AgentRunState = "provisioning"
+	AgentRunPreparing    AgentRunState = "preparing"
+	AgentRunRunning      AgentRunState = "running"
+	AgentRunValidating   AgentRunState = "validating"
+	AgentRunPublishing   AgentRunState = "publishing"
+	AgentRunCompleted    AgentRunState = "completed"
+	AgentRunFailed       AgentRunState = "failed"
+	AgentRunCancelled    AgentRunState = "cancelled"
+	AgentRunTimedOut     AgentRunState = "timed_out"
+)
+
 type Lease struct {
 	TTLMillis int64     `json:"ttl_ms"`
 	ExpiresAt time.Time `json:"expires_at"`
@@ -105,6 +120,22 @@ type WorkItem struct {
 	State       WorkItemState     `json:"state"`
 	Priority    int               `json:"priority,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`
+	InsertedAt  time.Time         `json:"inserted_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+type AgentRun struct {
+	ID          string            `json:"id"`
+	WorkItemID  string            `json:"work_item_id"`
+	SandboxID   string            `json:"sandbox_id,omitempty"`
+	Harness     string            `json:"harness,omitempty"`
+	Model       string            `json:"model,omitempty"`
+	State       AgentRunState     `json:"state"`
+	Prompt      string            `json:"prompt,omitempty"`
+	Actor       string            `json:"actor,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	StartedAt   *time.Time        `json:"started_at,omitempty"`
+	CompletedAt *time.Time        `json:"completed_at,omitempty"`
 	InsertedAt  time.Time         `json:"inserted_at"`
 	UpdatedAt   time.Time         `json:"updated_at"`
 }
