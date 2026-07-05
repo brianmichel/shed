@@ -335,12 +335,13 @@ func (s *MemoryStore) AcquireQueuedAgentRuns(_ context.Context, limit int) ([]mo
 	now := time.Now().UTC()
 	for i, run := range queued {
 		run.State = model.AgentRunRunning
+		run.Attempt++
 		run.UpdatedAt = now
 		if run.StartedAt == nil {
 			run.StartedAt = &now
 		}
 		s.agentRuns[run.ID] = run
-		s.appendFactoryEventLocked(run.WorkItemID, run.ID, "server.store", "agent_run.running", map[string]any{"state": string(run.State)})
+		s.appendFactoryEventLocked(run.WorkItemID, run.ID, "server.store", "agent_run.running", map[string]any{"state": string(run.State), "attempt": run.Attempt})
 		queued[i] = run
 	}
 	return queued, nil

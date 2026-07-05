@@ -98,6 +98,63 @@ func TestRunOnceMarksFailureAndContinues(t *testing.T) {
 	}
 }
 
+func TestRunOnceRetriesFailureBeforeFinalAttempt(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	s, err := New(st, ProcessorFunc(func(context.Context, model.AgentRun) error {
+		attempts++
+		if attempts == 1 {
+			return errors.New("try again")
+		}
+		return nil
+	}), Config{MaxAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count, err := s.RunOnce(ctx); err != nil || count != 1 {
+		t.Fatalf("first run count=%d err=%v", count, err)
+	}
+	queued, err := st.GetAgentRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.State != model.AgentRunQueued || queued.Attempt != 1 {
+		t.Fatalf("queued run=%#v, want queued attempt 1", queued)
+	}
+	if count, err := s.RunOnce(ctx); err != nil || count != 1 {
+		t.Fatalf("second run count=%d err=%v", count, err)
+	}
+	completed, err := st.GetAgentRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed.State != model.AgentRunCompleted || completed.Attempt != 2 {
+		t.Fatalf("completed run=%#v, want completed attempt 2", completed)
+	}
+	events, _, err := st.ListAgentRunEvents(ctx, run.ID, store.EventListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundRetry bool
+	for _, ev := range events {
+		if ev.Type == "agent_run.processor.retry_scheduled" {
+			foundRetry = true
+		}
+	}
+	if !foundRetry {
+		t.Fatalf("retry event missing: %#v", events)
+	}
+}
+
 func TestRunOnceMarksTimeout(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()
@@ -132,6 +189,36 @@ func TestRunOnceMarksTimeout(t *testing.T) {
 	}
 	if updatedItem.State != model.WorkItemFailed {
 		t.Fatalf("work item state=%s want failed", updatedItem.State)
+	}
+}
+
+func TestRunOnceRetriesTimeoutBeforeFinalAttempt(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := New(st, ProcessorFunc(func(ctx context.Context, _ model.AgentRun) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}), Config{RunTimeout: time.Nanosecond, MaxAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	queued, err := st.GetAgentRun(ctx, run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if queued.State != model.AgentRunQueued || queued.Attempt != 1 {
+		t.Fatalf("queued run=%#v, want retry after timeout", queued)
 	}
 }
 
@@ -267,7 +354,7 @@ func TestNewValidationAndDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.cfg.PollEvery != 5*time.Second || s.cfg.BatchSize != 10 {
+	if s.cfg.PollEvery != 5*time.Second || s.cfg.BatchSize != 10 || s.cfg.MaxAttempts != 1 {
 		t.Fatalf("defaults=%#v", s.cfg)
 	}
 }

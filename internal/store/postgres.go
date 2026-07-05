@@ -368,10 +368,11 @@ func (s *PostgresStore) AcquireQueuedAgentRuns(ctx context.Context, limit int) (
 )
 UPDATE agent_runs
 SET state = $3,
+    attempt = attempt + 1,
     started_at = COALESCE(started_at, $4),
     updated_at = $4
 WHERE id IN (SELECT id FROM picked)
-RETURNING id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`, model.AgentRunQueued, limit, model.AgentRunRunning, time.Now().UTC())
+RETURNING id, work_item_id, sandbox_id, harness, model, state, attempt, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`, model.AgentRunQueued, limit, model.AgentRunRunning, time.Now().UTC())
 		if err != nil {
 			return err
 		}
@@ -387,7 +388,7 @@ RETURNING id, work_item_id, sandbox_id, harness, model, state, prompt, actor, me
 			return err
 		}
 		for _, run := range runs {
-			if _, err := s.appendFactoryEventTx(ctx, tx, run.WorkItemID, run.ID, "server.store", "agent_run.running", map[string]any{"state": string(run.State)}); err != nil {
+			if _, err := s.appendFactoryEventTx(ctx, tx, run.WorkItemID, run.ID, "server.store", "agent_run.running", map[string]any{"state": string(run.State), "attempt": run.Attempt}); err != nil {
 				return err
 			}
 		}
@@ -397,7 +398,7 @@ RETURNING id, work_item_id, sandbox_id, harness, model, state, prompt, actor, me
 }
 
 func (s *PostgresStore) ListAgentRuns(ctx context.Context, opts AgentRunListOptions) ([]model.AgentRun, error) {
-	query := `SELECT id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at FROM agent_runs`
+	query := `SELECT id, work_item_id, sandbox_id, harness, model, state, attempt, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at FROM agent_runs`
 	where := []string{}
 	args := []any{}
 	if opts.WorkItemID != "" {
@@ -430,7 +431,7 @@ func (s *PostgresStore) ListAgentRuns(ctx context.Context, opts AgentRunListOpti
 }
 
 func (s *PostgresStore) GetAgentRun(ctx context.Context, agentRunID string) (model.AgentRun, error) {
-	run, err := scanAgentRun(s.db.QueryRowContext(ctx, `SELECT id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at FROM agent_runs WHERE id = $1`, agentRunID))
+	run, err := scanAgentRun(s.db.QueryRowContext(ctx, `SELECT id, work_item_id, sandbox_id, harness, model, state, attempt, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at FROM agent_runs WHERE id = $1`, agentRunID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.AgentRun{}, ErrAgentRunNotFound
 	}
@@ -449,7 +450,7 @@ func (s *PostgresStore) UpdateAgentRunState(ctx context.Context, agentRunID stri
 		if isTerminalAgentRunState(state) {
 			query += `, completed_at = $3`
 		}
-		query += ` WHERE id = $1 RETURNING id, work_item_id, sandbox_id, harness, model, state, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`
+		query += ` WHERE id = $1 RETURNING id, work_item_id, sandbox_id, harness, model, state, attempt, prompt, actor, metadata, started_at, completed_at, inserted_at, updated_at`
 		var err error
 		run, err = scanAgentRun(tx.QueryRowContext(ctx, query, args...))
 		if errors.Is(err, sql.ErrNoRows) {
@@ -865,7 +866,7 @@ func scanAgentRun(row rowScanner) (model.AgentRun, error) {
 	var state string
 	var metadata []byte
 	var startedAt, completedAt sql.NullTime
-	err := row.Scan(&run.ID, &run.WorkItemID, &sandboxID, &run.Harness, &run.Model, &state, &run.Prompt, &run.Actor, &metadata, &startedAt, &completedAt, &run.InsertedAt, &run.UpdatedAt)
+	err := row.Scan(&run.ID, &run.WorkItemID, &sandboxID, &run.Harness, &run.Model, &state, &run.Attempt, &run.Prompt, &run.Actor, &metadata, &startedAt, &completedAt, &run.InsertedAt, &run.UpdatedAt)
 	if err != nil {
 		return model.AgentRun{}, err
 	}

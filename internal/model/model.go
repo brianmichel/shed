@@ -131,6 +131,7 @@ type AgentRun struct {
 	Harness     string            `json:"harness,omitempty"`
 	Model       string            `json:"model,omitempty"`
 	State       AgentRunState     `json:"state"`
+	Attempt     int               `json:"attempt"`
 	Prompt      string            `json:"prompt,omitempty"`
 	Actor       string            `json:"actor,omitempty"`
 	Metadata    map[string]string `json:"metadata,omitempty"`

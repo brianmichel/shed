@@ -23,9 +23,10 @@ func (fn ProcessorFunc) ProcessAgentRun(ctx context.Context, run model.AgentRun)
 }
 
 type Config struct {
-	PollEvery  time.Duration
-	RunTimeout time.Duration
-	BatchSize  int
+	PollEvery   time.Duration
+	RunTimeout  time.Duration
+	BatchSize   int
+	MaxAttempts int
 }
 
 type Scheduler struct {
@@ -46,6 +47,9 @@ func New(st store.Store, processor Processor, cfg Config) (*Scheduler, error) {
 	}
 	if cfg.BatchSize <= 0 {
 		cfg.BatchSize = 10
+	}
+	if cfg.MaxAttempts <= 0 {
+		cfg.MaxAttempts = 1
 	}
 	return &Scheduler{store: st, processor: processor, cfg: cfg}, nil
 }
@@ -97,6 +101,9 @@ func (s *Scheduler) processOne(ctx context.Context, run model.AgentRun) error {
 	}
 	if err := s.processor.ProcessAgentRun(processCtx, run); err != nil {
 		if errors.Is(err, context.DeadlineExceeded) || processCtx.Err() == context.DeadlineExceeded {
+			if s.shouldRetry(run) {
+				return s.requeue(ctx, run, "agent_run.processor.retry_scheduled", map[string]any{"reason": "timeout", "attempt": run.Attempt, "max_attempts": s.cfg.MaxAttempts})
+			}
 			_, _ = s.store.UpdateAgentRunState(ctx, run.ID, model.AgentRunTimedOut)
 			_, _ = s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemFailed)
 			_, _ = s.store.AppendFactoryEvent(ctx, run.WorkItemID, run.ID, "server.scheduler", "agent_run.processor.timed_out", map[string]any{"timeout_ms": s.cfg.RunTimeout.Milliseconds()})
@@ -107,6 +114,9 @@ func (s *Scheduler) processOne(ctx context.Context, run model.AgentRun) error {
 			_, _ = s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemCancelled)
 			_, _ = s.store.AppendFactoryEvent(ctx, run.WorkItemID, run.ID, "server.scheduler", "agent_run.processor.cancelled", map[string]any{})
 			return nil
+		}
+		if s.shouldRetry(run) {
+			return s.requeue(ctx, run, "agent_run.processor.retry_scheduled", map[string]any{"reason": "failure", "attempt": run.Attempt, "max_attempts": s.cfg.MaxAttempts, "message": err.Error()})
 		}
 		_, _ = s.store.UpdateAgentRunState(ctx, run.ID, model.AgentRunFailed)
 		_, _ = s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemFailed)
@@ -119,5 +129,17 @@ func (s *Scheduler) processOne(ctx context.Context, run model.AgentRun) error {
 	if _, err := s.store.UpdateWorkItemState(ctx, run.WorkItemID, model.WorkItemCompleted); err != nil {
 		return err
 	}
+	return nil
+}
+
+func (s *Scheduler) shouldRetry(run model.AgentRun) bool {
+	return run.Attempt > 0 && run.Attempt < s.cfg.MaxAttempts
+}
+
+func (s *Scheduler) requeue(ctx context.Context, run model.AgentRun, eventType string, data map[string]any) error {
+	if _, err := s.store.UpdateAgentRunState(ctx, run.ID, model.AgentRunQueued); err != nil {
+		return err
+	}
+	_, _ = s.store.AppendFactoryEvent(ctx, run.WorkItemID, run.ID, "server.scheduler", eventType, data)
 	return nil
 }
