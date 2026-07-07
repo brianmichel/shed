@@ -39,6 +39,7 @@ type Manager struct {
 	builtins  map[string]ComputeV1
 	externals map[string]ExternalPluginConfig
 	clients   map[string]*externalClient
+	classes   map[string]SandboxClass
 }
 
 type externalClient struct {
@@ -57,10 +58,42 @@ func NewManager(cfg ManagerConfig) *Manager {
 	if cfg.CallTimeout == 0 {
 		cfg.CallTimeout = 30 * time.Second
 	}
-	return &Manager{cfg: cfg, builtins: map[string]ComputeV1{}, externals: map[string]ExternalPluginConfig{}, clients: map[string]*externalClient{}}
+	return &Manager{cfg: cfg, builtins: map[string]ComputeV1{}, externals: map[string]ExternalPluginConfig{}, clients: map[string]*externalClient{}, classes: map[string]SandboxClass{}}
 }
 
 func (m *Manager) DefaultCompute() string { return m.cfg.DefaultCompute }
+
+func (m *Manager) RegisterClass(class SandboxClass) error {
+	if class.Name == "" || class.Driver == "" {
+		return fmt.Errorf("compute class name and driver are required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.classes[class.Name] = cloneClass(class)
+	return nil
+}
+
+func (m *Manager) ListClasses() []SandboxClass {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	names := make([]string, 0, len(m.classes))
+	for name := range m.classes {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]SandboxClass, 0, len(names))
+	for _, name := range names {
+		out = append(out, cloneClass(m.classes[name]))
+	}
+	return out
+}
+
+func (m *Manager) GetClass(name string) (SandboxClass, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	class, ok := m.classes[name]
+	return cloneClass(class), ok
+}
 
 func (m *Manager) ListDrivers(ctx context.Context) []DriverDescriptor {
 	m.mu.Lock()
@@ -455,11 +488,30 @@ func (m *Manager) emit(ctx context.Context, sandboxID, eventType string, data ma
 	}
 }
 
-func driverConfig(alloc ComputeV1) map[string]string {
-	if cfg, ok := alloc.(interface{ DriverConfig() map[string]string }); ok {
-		return cfg.DriverConfig()
+func driverConfig(alloc ComputeV1) map[string]any {
+	if cfg, ok := alloc.(interface{ DriverConfig() map[string]any }); ok {
+		return cloneAnyMap(cfg.DriverConfig())
 	}
 	return nil
+}
+
+func cloneClass(in SandboxClass) SandboxClass {
+	out := in
+	out.Capabilities = cloneAnyMap(in.Capabilities)
+	out.ParametersSchema = cloneAnyMap(in.ParametersSchema)
+	out.DriverConfig = cloneAnyMap(in.DriverConfig)
+	return out
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 func restrictedEnv(env map[string]string) []string {

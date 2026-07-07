@@ -25,7 +25,7 @@ type DriverDescriptor struct {
 	Args       []string          `json:"args,omitempty"`
 	Env        map[string]string `json:"env,omitempty"`
 	APIVersion string            `json:"api_version,omitempty"`
-	Config     map[string]string `json:"config,omitempty"`
+	Config     map[string]any    `json:"config,omitempty"`
 	Plugin     *PluginInfo       `json:"plugin,omitempty"`
 	Loaded     bool              `json:"loaded"`
 	Error      string            `json:"error,omitempty"`
@@ -34,6 +34,7 @@ type DriverDescriptor struct {
 type AllocateRequest struct {
 	APIVersion     string            `json:"api_version"`
 	ComputeDriver  string            `json:"compute_driver"`
+	ComputeClass   string            `json:"compute_class,omitempty"`
 	SandboxID      string            `json:"sandbox_id"`
 	SessionID      string            `json:"session_id"`
 	SessionKey     string            `json:"session_key"`
@@ -42,7 +43,8 @@ type AllocateRequest struct {
 	Template       string            `json:"template"`
 	LeaseTTLMillis int64             `json:"lease_ttl_ms"`
 	LeaseExpiresAt time.Time         `json:"lease_expires_at"`
-	Config         map[string]string `json:"config,omitempty"`
+	Parameters     map[string]any    `json:"parameters,omitempty"`
+	Config         map[string]any    `json:"config,omitempty"`
 	Metadata       map[string]string `json:"metadata,omitempty"`
 }
 
@@ -55,10 +57,10 @@ type AllocateResponse struct {
 }
 
 type StatusRequest struct {
-	APIVersion string            `json:"api_version"`
-	SandboxID  string            `json:"sandbox_id"`
-	ExternalID string            `json:"external_id,omitempty"`
-	Config     map[string]string `json:"config,omitempty"`
+	APIVersion string         `json:"api_version"`
+	SandboxID  string         `json:"sandbox_id"`
+	ExternalID string         `json:"external_id,omitempty"`
+	Config     map[string]any `json:"config,omitempty"`
 }
 
 type StatusResponse struct {
@@ -68,12 +70,12 @@ type StatusResponse struct {
 }
 
 type RenewRequest struct {
-	APIVersion     string            `json:"api_version"`
-	SandboxID      string            `json:"sandbox_id"`
-	ExternalID     string            `json:"external_id,omitempty"`
-	LeaseTTLMillis int64             `json:"lease_ttl_ms"`
-	LeaseExpiresAt time.Time         `json:"lease_expires_at"`
-	Config         map[string]string `json:"config,omitempty"`
+	APIVersion     string         `json:"api_version"`
+	SandboxID      string         `json:"sandbox_id"`
+	ExternalID     string         `json:"external_id,omitempty"`
+	LeaseTTLMillis int64          `json:"lease_ttl_ms"`
+	LeaseExpiresAt time.Time      `json:"lease_expires_at"`
+	Config         map[string]any `json:"config,omitempty"`
 }
 
 type RenewResponse struct {
@@ -82,11 +84,11 @@ type RenewResponse struct {
 }
 
 type ReleaseRequest struct {
-	APIVersion string            `json:"api_version"`
-	SandboxID  string            `json:"sandbox_id"`
-	ExternalID string            `json:"external_id,omitempty"`
-	Config     map[string]string `json:"config,omitempty"`
-	Reason     string            `json:"reason,omitempty"`
+	APIVersion string         `json:"api_version"`
+	SandboxID  string         `json:"sandbox_id"`
+	ExternalID string         `json:"external_id,omitempty"`
+	Config     map[string]any `json:"config,omitempty"`
+	Reason     string         `json:"reason,omitempty"`
 }
 
 type ReleaseResponse struct {
@@ -104,7 +106,7 @@ type ExecRequest struct {
 	Env        map[string]string `json:"env,omitempty"`
 	Stdin      bool              `json:"stdin"`
 	TimeoutMS  int64             `json:"timeout_ms"`
-	Config     map[string]string `json:"config,omitempty"`
+	Config     map[string]any    `json:"config,omitempty"`
 	Metadata   map[string]string `json:"metadata,omitempty"`
 }
 

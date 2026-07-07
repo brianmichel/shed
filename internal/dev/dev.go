@@ -17,6 +17,7 @@ type Config struct {
 	UIEnabled           bool
 	DefaultCompute      string
 	ExternalComputes    []compute.ExternalPluginConfig
+	ComputeClasses      []compute.SandboxClass
 }
 
 func Run(ctx context.Context, cfg Config) error {
@@ -38,6 +39,12 @@ func Run(ctx context.Context, cfg Config) error {
 	_ = mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: abs, HeartbeatEvery: 5 * time.Second}))
 	for _, ext := range cfg.ExternalComputes {
 		if err := mgr.RegisterExternal(ext); err != nil {
+			return err
+		}
+	}
+	_ = mgr.RegisterClass(compute.SandboxClass{Name: "local", Driver: "local", Description: "Local host workspace sandbox", Capabilities: map[string]any{"exec": true, "files": true}})
+	for _, class := range cfg.ComputeClasses {
+		if err := mgr.RegisterClass(class); err != nil {
 			return err
 		}
 	}

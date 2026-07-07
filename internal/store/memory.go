@@ -54,7 +54,7 @@ func (s *MemoryStore) CreateSandbox(_ context.Context, in SandboxCreate) (model.
 		in.Template = "default"
 	}
 	id := newID("sbx")
-	sb := model.Sandbox{ID: id, Environment: in.Environment, Template: in.Template, State: model.SandboxPendingClient, Compute: in.Compute, ComputeAPIVersion: in.ComputeAPIVersion, ComputeConfig: cloneStringMap(in.ComputeConfig), Metadata: cloneStringMap(in.Metadata), Capabilities: map[string]bool{"commands": true, "files": true, "pty": false}, Lease: model.Lease{TTLMillis: in.TTL.Milliseconds(), ExpiresAt: now.Add(in.TTL)}, InsertedAt: now, UpdatedAt: now}
+	sb := model.Sandbox{ID: id, Environment: in.Environment, Template: in.Template, ComputeClass: in.ComputeClass, State: model.SandboxPendingClient, Compute: in.Compute, ComputeAPIVersion: in.ComputeAPIVersion, Parameters: cloneAnyMap(in.Parameters), ComputeConfig: cloneAnyMap(in.ComputeConfig), Metadata: cloneStringMap(in.Metadata), Capabilities: map[string]bool{"commands": true, "files": true, "pty": false}, Lease: model.Lease{TTLMillis: in.TTL.Milliseconds(), ExpiresAt: now.Add(in.TTL)}, InsertedAt: now, UpdatedAt: now}
 	sess := model.ClientSession{SessionID: newID("sess"), SessionKey: newID("seedkey"), SandboxID: id, State: model.SessionIssued, InsertedAt: now, UpdatedAt: now}
 	s.sandboxes[id] = sb
 	s.sessions[sess.SessionID] = sess
@@ -309,6 +309,17 @@ func cloneStringMap(in map[string]string) map[string]string {
 		return nil
 	}
 	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneAnyMap(in map[string]any) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
 	for k, v := range in {
 		out[k] = v
 	}

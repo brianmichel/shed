@@ -5,13 +5,15 @@ Shed compute plugins are responsible for turning a logical sandbox record into u
 ## Lifecycle
 
 1. `POST /v1/sandboxes` creates a sandbox record and client session in the store.
-2. Shed calls the selected compute driver's `Allocate` method with:
+2. Shed resolves the requested operator-defined compute class, then calls the selected compute driver's `Allocate` method with:
    - sandbox/session IDs
    - the session key
    - the client WebSocket `connect_url`
    - environment/template fields
+   - the requested compute class
+   - validated parameters
    - lease expiry/TTL
-   - compute-specific config
+   - resolved compute-specific config
 3. The compute driver creates or finds a compute resource, prepares the workspace, and usually starts/provisions `shed client` with the supplied credentials.
 4. The sandbox becomes `ready` when the client connects and registers through the existing WebSocket protocol. Drivers may also advertise direct `exec` support for computes where Shed should dispatch API commands to the plugin rather than a connected client.
 5. Shed calls `Status` on sandbox reads, `Renew` when leases are extended, and `Release` for API releases or lease expiry.
@@ -101,6 +103,12 @@ func main() {
 
 Build it as a normal executable, not a Go `.so` plugin.
 
+## Compute classes
+
+Users should normally request compute classes such as `linux-arm64`, `darwin-arm64`, or `linux-x86_64-gpu`, not raw provider jobs. Classes are operator-defined and resolve to one compute driver plus bounded parameters and driver config. This lets a Nomad plugin expose useful compute shapes without accepting arbitrary Nomad job specs from callers.
+
+See [`compute-classes.md`](compute-classes.md).
+
 ## Operational configuration
 
 `shed server` supports:
@@ -113,7 +121,7 @@ shed server \
 
 Multiple `-compute-plugin name=/path` flags may be supplied. `SHED_COMPUTE_PLUGINS` accepts a comma-separated list using the same `name=/path` form. `shed dev` supports the same `-compute-driver` and `-compute-plugin` flags.
 
-The built-in `local` compute is always registered by `shed server` and `shed dev`. It creates a workspace under `-compute-workspace-root` in server mode, or under `-workspace-root` in dev mode, and starts an in-process `shed client` using the normal session/WebSocket path.
+The built-in `local` compute is always registered by `shed server` and `shed dev`. It creates a workspace under `-compute-workspace-root` in server mode, or under `-workspace-root` in dev mode, and starts an in-process `shed client` using the normal session/WebSocket path. Shed also registers a default `local` compute class for this driver. Additional operator-defined classes can be loaded with `shed server -config shed.json`.
 
 ## Security boundaries
 

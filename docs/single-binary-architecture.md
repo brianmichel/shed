@@ -75,7 +75,8 @@ Core endpoints:
 
 - `GET /v1/health`
 - `GET /v1/compute/drivers` — list registered compute drivers, server-side configuration, and plugin metadata.
-- `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, and call the selected compute driver.
+- `GET /v1/compute/classes` — list operator-defined user-facing compute classes such as `linux-arm64` or `darwin-arm64`.
+- `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, resolve the requested compute class, and call the selected compute driver.
 - `GET /v1/sandboxes`
 - `GET /v1/sandboxes/{sandbox_id}`
 - `POST /v1/sandboxes/{sandbox_id}/release`
@@ -131,7 +132,7 @@ All JSON errors use a stable machine-readable shape:
 
 ### Compute lifecycle
 
-Each sandbox records compute driver identity, compute API version, external compute/allocation ID, compute config, and compute metadata. `POST /v1/sandboxes` persists the sandbox/session first, then calls compute `Allocate`. If allocation fails, Shed emits a compute failure event and marks the sandbox `failed`. The sandbox becomes `ready` when a provisioned `shed client` connects and registers, but drivers may also advertise direct `exec` support for command dispatch without a connected client.
+Each sandbox records the requested compute class, validated parameters, compute driver identity, compute API version, external compute/allocation ID, resolved compute config, and compute metadata. `POST /v1/sandboxes` resolves an operator-defined compute class such as `linux-arm64` into a driver/config, validates parameters, persists the sandbox/session, then calls compute `Allocate`. If allocation fails, Shed emits a compute failure event and marks the sandbox `failed`. The sandbox becomes `ready` when a provisioned `shed client` connects and registers, but drivers may also advertise direct `exec` support for command dispatch without a connected client.
 
 Compute plugins implement the versioned `compute.v1` lifecycle:
 
@@ -143,7 +144,7 @@ Compute plugins implement the versioned `compute.v1` lifecycle:
 - `Exec` — execute an API-created command and stream standard `command.*` events.
 - `Stdin`, `Cancel`, `Kill` — command control operations for plugin-executed commands.
 
-External compute drivers run as isolated child processes through HashiCorp go-plugin/gRPC. See [`compute-plugins.md`](compute-plugins.md).
+External compute drivers run as isolated child processes through HashiCorp go-plugin/gRPC. See [`compute-plugins.md`](compute-plugins.md). Compute classes are documented in [`compute-classes.md`](compute-classes.md).
 
 ### Lease lifecycle
 

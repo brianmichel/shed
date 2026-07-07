@@ -100,18 +100,123 @@ func (s *Server) CreateSandbox(ctx context.Context, in store.SandboxCreate) (mod
 	return s.createAndAllocateSandbox(ctx, in)
 }
 
-func (s *Server) createAndAllocateSandbox(ctx context.Context, in store.SandboxCreate) (model.Sandbox, model.ClientSession, error) {
+func (s *Server) resolveSandboxCreate(in store.SandboxCreate) (store.SandboxCreate, error) {
+	if in.ComputeClass != "" {
+		class, ok := s.allocMgr.GetClass(in.ComputeClass)
+		if !ok {
+			return in, fmt.Errorf("%w: %s", compute.ErrComputeClassNotFound, in.ComputeClass)
+		}
+		if in.Compute == "" {
+			in.Compute = class.Driver
+		}
+		if in.TTL <= 0 && class.Defaults.TTLMillis > 0 {
+			in.TTL = time.Duration(class.Defaults.TTLMillis) * time.Millisecond
+		}
+		params, err := resolveClassParameters(class, in.Parameters)
+		if err != nil {
+			return in, fmt.Errorf("%w: %v", compute.ErrInvalidComputeClassParameter, err)
+		}
+		in.Parameters = params
+		in.ComputeConfig = mergeAnyMaps(class.DriverConfig, in.ComputeConfig)
+	}
 	if in.Compute == "" {
 		in.Compute = s.allocMgr.DefaultCompute()
 	}
 	if in.ComputeAPIVersion == "" {
 		in.ComputeAPIVersion = compute.APIVersionV1
 	}
+	return in, nil
+}
+
+func resolveClassParameters(class compute.SandboxClass, supplied map[string]any) (map[string]any, error) {
+	params := map[string]any{}
+	properties, _ := class.ParametersSchema["properties"].(map[string]any)
+	for name, specAny := range properties {
+		spec, _ := specAny.(map[string]any)
+		if def, ok := spec["default"]; ok {
+			params[name] = def
+		}
+	}
+	for name, value := range supplied {
+		if len(properties) > 0 {
+			specAny, ok := properties[name]
+			if !ok {
+				return nil, fmt.Errorf("unknown parameter %q for compute class %q", name, class.Name)
+			}
+			spec, _ := specAny.(map[string]any)
+			if err := validateParameterType(name, value, spec); err != nil {
+				return nil, err
+			}
+		}
+		params[name] = value
+	}
+	if required, ok := class.ParametersSchema["required"].([]any); ok {
+		for _, raw := range required {
+			name, _ := raw.(string)
+			if name == "" {
+				continue
+			}
+			if _, ok := params[name]; !ok {
+				return nil, fmt.Errorf("missing required parameter %q for compute class %q", name, class.Name)
+			}
+		}
+	}
+	if len(params) == 0 {
+		return nil, nil
+	}
+	return params, nil
+}
+
+func validateParameterType(name string, value any, spec map[string]any) error {
+	typeName, _ := spec["type"].(string)
+	switch typeName {
+	case "", "any":
+		return nil
+	case "string":
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("parameter %q must be a string", name)
+		}
+	case "boolean":
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("parameter %q must be a boolean", name)
+		}
+	case "number", "integer":
+		n, ok := number(value)
+		if !ok {
+			return fmt.Errorf("parameter %q must be a number", name)
+		}
+		if typeName == "integer" && n != float64(int64(n)) {
+			return fmt.Errorf("parameter %q must be an integer", name)
+		}
+	}
+	return nil
+}
+
+func mergeAnyMaps(base, override map[string]any) map[string]any {
+	if len(base) == 0 && len(override) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(base)+len(override))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range override {
+		out[k] = v
+	}
+	return out
+}
+
+func (s *Server) createAndAllocateSandbox(ctx context.Context, in store.SandboxCreate) (model.Sandbox, model.ClientSession, error) {
+	resolved, err := s.resolveSandboxCreate(in)
+	if err != nil {
+		return model.Sandbox{}, model.ClientSession{}, err
+	}
+	in = resolved
 	sb, sess, err := s.store.CreateSandbox(ctx, in)
 	if err != nil {
 		return model.Sandbox{}, model.ClientSession{}, err
 	}
-	resp, err := s.allocMgr.Allocate(ctx, compute.AllocateRequest{APIVersion: in.ComputeAPIVersion, ComputeDriver: in.Compute, SandboxID: sb.ID, SessionID: sess.SessionID, SessionKey: sess.SessionKey, ConnectURL: s.ClientURL(), Environment: sb.Environment, Template: sb.Template, LeaseTTLMillis: sb.Lease.TTLMillis, LeaseExpiresAt: sb.Lease.ExpiresAt, Config: in.ComputeConfig, Metadata: in.Metadata})
+	resp, err := s.allocMgr.Allocate(ctx, compute.AllocateRequest{APIVersion: in.ComputeAPIVersion, ComputeDriver: in.Compute, ComputeClass: in.ComputeClass, SandboxID: sb.ID, SessionID: sess.SessionID, SessionKey: sess.SessionKey, ConnectURL: s.ClientURL(), Environment: sb.Environment, Template: sb.Template, LeaseTTLMillis: sb.Lease.TTLMillis, LeaseExpiresAt: sb.Lease.ExpiresAt, Parameters: sb.Parameters, Config: in.ComputeConfig, Metadata: in.Metadata})
 	if err != nil {
 		_, _ = s.store.UpdateSandboxState(ctx, sb.ID, model.SandboxFailed)
 		return sb, sess, err
@@ -156,6 +261,7 @@ func (s *Server) routes() {
 		api.WriteJSON(w, 200, map[string]any{"status": "ok", "time": time.Now().UTC()})
 	})
 	s.mux.HandleFunc("GET /v1/compute/drivers", s.listComputeDrivers)
+	s.mux.HandleFunc("GET /v1/compute/classes", s.listComputeClasses)
 	s.mux.HandleFunc("GET /v1/sandboxes", s.listSandboxes)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.createSandbox)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}", s.getSandbox)
@@ -188,12 +294,18 @@ func (s *Server) listComputeDrivers(w http.ResponseWriter, r *http.Request) {
 	api.WriteJSON(w, 200, map[string]any{"data": drivers, "default_driver": s.allocMgr.DefaultCompute()})
 }
 
+func (s *Server) listComputeClasses(w http.ResponseWriter, r *http.Request) {
+	api.WriteJSON(w, 200, map[string]any{"data": s.allocMgr.ListClasses()})
+}
+
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Environment, Template string
-		Compute               string            `json:"compute_driver"`
-		ComputeAPIVersion     string            `json:"compute_api_version"`
-		ComputeConfig         map[string]string `json:"compute_config"`
+		ComputeClass          string         `json:"compute_class"`
+		Compute               string         `json:"compute_driver"`
+		ComputeAPIVersion     string         `json:"compute_api_version"`
+		Parameters            map[string]any `json:"parameters"`
+		ComputeConfig         map[string]any `json:"compute_config"`
 		Lease                 struct {
 			TTLMS int64 `json:"ttl_ms"`
 		} `json:"lease"`
@@ -201,10 +313,18 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&in)
 	ttl := time.Duration(in.Lease.TTLMS) * time.Millisecond
-	sb, sess, err := s.createAndAllocateSandbox(r.Context(), store.SandboxCreate{Environment: in.Environment, Template: in.Template, TTL: ttl, Compute: in.Compute, ComputeAPIVersion: in.ComputeAPIVersion, ComputeConfig: in.ComputeConfig, Metadata: in.Metadata})
+	sb, sess, err := s.createAndAllocateSandbox(r.Context(), store.SandboxCreate{Environment: in.Environment, Template: in.Template, ComputeClass: in.ComputeClass, TTL: ttl, Compute: in.Compute, ComputeAPIVersion: in.ComputeAPIVersion, Parameters: in.Parameters, ComputeConfig: in.ComputeConfig, Metadata: in.Metadata})
 	if err != nil {
 		if errors.Is(err, compute.ErrComputeNotFound) {
 			api.WriteError(w, http.StatusUnprocessableEntity, "compute_not_found", err.Error(), false)
+			return
+		}
+		if errors.Is(err, compute.ErrComputeClassNotFound) {
+			api.WriteError(w, http.StatusUnprocessableEntity, "compute_class_not_found", err.Error(), false)
+			return
+		}
+		if errors.Is(err, compute.ErrInvalidComputeClassParameter) {
+			api.WriteError(w, http.StatusUnprocessableEntity, "invalid_compute_class_parameter", err.Error(), false)
 			return
 		}
 		api.WriteError(w, http.StatusBadGateway, "allocation_failed", err.Error(), true)

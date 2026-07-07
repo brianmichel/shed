@@ -10,10 +10,12 @@ import (
 type SandboxCreate struct {
 	Environment       string
 	Template          string
+	ComputeClass      string
 	TTL               time.Duration
 	Compute           string
 	ComputeAPIVersion string
-	ComputeConfig     map[string]string
+	Parameters        map[string]any
+	ComputeConfig     map[string]any
 	Metadata          map[string]string
 }
 

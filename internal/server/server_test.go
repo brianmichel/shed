@@ -45,6 +45,102 @@ func TestListComputeDrivers(t *testing.T) {
 	}
 }
 
+func TestListComputeClasses(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "local"})
+	if err := mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: t.TempDir()})); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RegisterClass(compute.SandboxClass{Name: "linux-arm64", Driver: "local", Description: "Linux ARM64", Capabilities: map[string]any{"os": "linux", "arch": "arm64"}}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{Addr: "127.0.0.1:0", ComputeManager: mgr, DefaultCompute: "local"}, st)
+	req := httptest.NewRequest(http.MethodGet, "/v1/compute/classes", nil)
+	w := httptest.NewRecorder()
+	srv.listComputeClasses(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data []compute.SandboxClass `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Data) != 1 || body.Data[0].Name != "linux-arm64" {
+		t.Fatalf("body=%#v", body)
+	}
+}
+
+func TestCreateSandboxWithComputeClassResolvesConfigAndParameters(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "local"})
+	root := t.TempDir()
+	if err := mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: root})); err != nil {
+		t.Fatal(err)
+	}
+	class := compute.SandboxClass{
+		Name:         "linux-arm64",
+		Driver:       "local",
+		Defaults:     compute.ClassDefaults{TTLMillis: 120000},
+		DriverConfig: map[string]any{"workspace_root": root},
+		ParametersSchema: map[string]any{
+			"type":     "object",
+			"required": []any{"cpu"},
+			"properties": map[string]any{
+				"cpu":       map[string]any{"type": "integer"},
+				"memory_mb": map[string]any{"type": "integer", "default": float64(2048)},
+			},
+		},
+	}
+	if err := mgr.RegisterClass(class); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{Addr: "127.0.0.1:0", ComputeManager: mgr, DefaultCompute: "local"}, st)
+	sb, _, err := srv.CreateSandbox(ctx, store.SandboxCreate{ComputeClass: "linux-arm64", Parameters: map[string]any{"cpu": float64(1000)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sb.ComputeClass != "linux-arm64" || sb.Compute != "local" {
+		t.Fatalf("sandbox class/compute not resolved: %#v", sb)
+	}
+	if sb.Lease.TTLMillis != 120000 {
+		t.Fatalf("ttl=%d", sb.Lease.TTLMillis)
+	}
+	if sb.Parameters["memory_mb"] != float64(2048) || sb.Parameters["cpu"] != float64(1000) {
+		t.Fatalf("parameters=%#v", sb.Parameters)
+	}
+	if sb.ComputeConfig["workspace_root"] != root {
+		t.Fatalf("compute_config=%#v", sb.ComputeConfig)
+	}
+}
+
+func TestCreateSandboxWithInvalidClassParameterFailsBeforePersist(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "local"})
+	if err := mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: t.TempDir()})); err != nil {
+		t.Fatal(err)
+	}
+	if err := mgr.RegisterClass(compute.SandboxClass{Name: "linux-arm64", Driver: "local", ParametersSchema: map[string]any{"properties": map[string]any{"cpu": map[string]any{"type": "integer"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{Addr: "127.0.0.1:0", ComputeManager: mgr, DefaultCompute: "local"}, st)
+	_, _, err := srv.CreateSandbox(ctx, store.SandboxCreate{ComputeClass: "linux-arm64", Parameters: map[string]any{"memory_mb": float64(2048)}})
+	if err == nil {
+		t.Fatal("expected validation error")
+	}
+	sandboxes, listErr := st.ListSandboxes(ctx)
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(sandboxes) != 0 {
+		t.Fatalf("sandbox persisted despite validation error: %#v", sandboxes)
+	}
+}
+
 func TestCreateSandboxAllocationFailureMarksSandboxFailed(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()

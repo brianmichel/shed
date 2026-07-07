@@ -14,6 +14,8 @@ const (
 )
 
 type PluginInfo = internal.PluginInfo
+type SandboxClass = internal.SandboxClass
+type ClassDefaults = internal.ClassDefaults
 type AllocateRequest = internal.AllocateRequest
 type AllocateResponse = internal.AllocateResponse
 type StatusRequest = internal.StatusRequest

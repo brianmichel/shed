@@ -45,12 +45,14 @@ type Sandbox struct {
 	ID                   string            `json:"id"`
 	Environment          string            `json:"environment"`
 	Template             string            `json:"template"`
+	ComputeClass         string            `json:"compute_class,omitempty"`
 	State                SandboxState      `json:"state"`
 	Compute              string            `json:"compute_driver,omitempty"`
 	ComputeAPIVersion    string            `json:"compute_api_version,omitempty"`
 	ComputePluginVersion string            `json:"compute_plugin_version,omitempty"`
 	ExternalAllocationID string            `json:"external_allocation_id,omitempty"`
-	ComputeConfig        map[string]string `json:"compute_config,omitempty"`
+	Parameters           map[string]any    `json:"parameters,omitempty"`
+	ComputeConfig        map[string]any    `json:"compute_config,omitempty"`
 	ComputeMetadata      map[string]string `json:"compute_metadata,omitempty"`
 	Metadata             map[string]string `json:"metadata,omitempty"`
 	Capabilities         map[string]bool   `json:"capabilities,omitempty"`

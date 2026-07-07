@@ -13,6 +13,7 @@ import (
 
 	"github.com/brianmichel/shed/internal/client"
 	"github.com/brianmichel/shed/internal/compute"
+	shedconfig "github.com/brianmichel/shed/internal/config"
 	"github.com/brianmichel/shed/internal/dev"
 	"github.com/brianmichel/shed/internal/server"
 	"github.com/brianmichel/shed/internal/store"
@@ -57,11 +58,23 @@ func runServer(ctx context.Context, args []string) error {
 	var plugins pluginConfigFlag
 	plugins.setMany(envOr("SHED_COMPUTE_PLUGINS", ""))
 	fs.Var(&plugins, "compute-plugin", "external compute plugin as name=/path/to/plugin; repeatable")
-	_ = fs.String("config", "", "config file path (reserved)")
+	configPath := fs.String("config", envOr("SHED_CONFIG", ""), "JSON config file path")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	mgr, err := buildComputeManager(ctx, *defaultCompute, *workspace, plugins)
+	fileCfg, err := shedconfig.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	if *defaultCompute == "local" && fileCfg.Compute.DefaultDriver != "" {
+		*defaultCompute = fileCfg.Compute.DefaultDriver
+	}
+	externals, err := plugins.externalConfigs()
+	if err != nil {
+		return err
+	}
+	externals = append(externals, fileCfg.ExternalComputes()...)
+	mgr, err := buildComputeManagerFromConfigs(ctx, *defaultCompute, *workspace, externals, fileCfg.ComputeClasses)
 	if err != nil {
 		return err
 	}
@@ -95,15 +108,23 @@ func runDev(ctx context.Context, args []string) error {
 	var plugins pluginConfigFlag
 	plugins.setMany(envOr("SHED_DEV_COMPUTE_PLUGINS", ""))
 	fs.Var(&plugins, "compute-plugin", "external compute plugin as name=/path/to/plugin; repeatable")
-	_ = fs.String("config", "", "config file path (reserved)")
+	configPath := fs.String("config", envOr("SHED_DEV_CONFIG", envOr("SHED_CONFIG", "")), "JSON config file path")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	fileCfg, err := shedconfig.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	if *defaultCompute == "local" && fileCfg.Compute.DefaultDriver != "" {
+		*defaultCompute = fileCfg.Compute.DefaultDriver
 	}
 	externals, err := plugins.externalConfigs()
 	if err != nil {
 		return err
 	}
-	return dev.Run(ctx, dev.Config{Addr: *addr, WorkspaceRoot: *workspace, UIEnabled: *uiEnabled, DefaultCompute: *defaultCompute, ExternalComputes: externals})
+	externals = append(externals, fileCfg.ExternalComputes()...)
+	return dev.Run(ctx, dev.Config{Addr: *addr, WorkspaceRoot: *workspace, UIEnabled: *uiEnabled, DefaultCompute: *defaultCompute, ExternalComputes: externals, ComputeClasses: fileCfg.ComputeClasses})
 }
 
 type pluginConfigFlag []string
@@ -132,11 +153,7 @@ func (f pluginConfigFlag) externalConfigs() ([]compute.ExternalPluginConfig, err
 	return out, nil
 }
 
-func buildComputeManager(ctx context.Context, defaultCompute, workspace string, plugins pluginConfigFlag) (*compute.Manager, error) {
-	externals, err := plugins.externalConfigs()
-	if err != nil {
-		return nil, err
-	}
+func buildComputeManagerFromConfigs(ctx context.Context, defaultCompute, workspace string, externals []compute.ExternalPluginConfig, classes []compute.SandboxClass) (*compute.Manager, error) {
 	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: defaultCompute})
 	_ = mgr.RegisterBuiltin("local", compute.NewLocalCompute(ctx, compute.LocalConfig{WorkspaceRoot: workspace, HeartbeatEvery: 5 * time.Second}))
 	for _, ext := range externals {
@@ -144,7 +161,17 @@ func buildComputeManager(ctx context.Context, defaultCompute, workspace string, 
 			return nil, err
 		}
 	}
+	registerDefaultLocalClasses(mgr)
+	for _, class := range classes {
+		if err := mgr.RegisterClass(class); err != nil {
+			return nil, err
+		}
+	}
 	return mgr, nil
+}
+
+func registerDefaultLocalClasses(mgr *compute.Manager) {
+	_ = mgr.RegisterClass(compute.SandboxClass{Name: "local", Driver: "local", Description: "Local host workspace sandbox", Capabilities: map[string]any{"exec": true, "files": true}})
 }
 
 func envOr(k, d string) string {
