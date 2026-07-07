@@ -111,17 +111,20 @@ type APIToken struct {
 }
 
 type WorkItem struct {
-	ID          string            `json:"id"`
-	Title       string            `json:"title"`
-	Description string            `json:"description,omitempty"`
-	SourceType  string            `json:"source_type,omitempty"`
-	SourceID    string            `json:"source_id,omitempty"`
-	Actor       string            `json:"actor,omitempty"`
-	State       WorkItemState     `json:"state"`
-	Priority    int               `json:"priority,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	InsertedAt  time.Time         `json:"inserted_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
+	ID                   string            `json:"id"`
+	Title                string            `json:"title"`
+	Description          string            `json:"description,omitempty"`
+	SourceType           string            `json:"source_type,omitempty"`
+	SourceID             string            `json:"source_id,omitempty"`
+	RepositoryID         string            `json:"repository_id,omitempty"`
+	RepositoryRef        string            `json:"repository_ref,omitempty"`
+	RepositoryBaseBranch string            `json:"repository_base_branch,omitempty"`
+	Actor                string            `json:"actor,omitempty"`
+	State                WorkItemState     `json:"state"`
+	Priority             int               `json:"priority,omitempty"`
+	Metadata             map[string]string `json:"metadata,omitempty"`
+	InsertedAt           time.Time         `json:"inserted_at"`
+	UpdatedAt            time.Time         `json:"updated_at"`
 }
 
 type Repository struct {

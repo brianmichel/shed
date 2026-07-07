@@ -35,8 +35,12 @@ func TestAPIRequiresBearerToken(t *testing.T) {
 
 func TestWorkItemAPI(t *testing.T) {
 	srv := New(Config{APIToken: "api-secret"}, store.NewMemoryStore())
+	repo, err := srv.store.CreateRepository(context.Background(), store.RepositoryCreate{Name: "shed", CloneURL: "https://github.com/brianmichel/shed.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	createReq := httptest.NewRequest(http.MethodPost, "/v1/work-items", strings.NewReader(`{"title":"Fix bug","source_type":"api","actor":"tester","metadata":{"repo":"shed"}}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/work-items", strings.NewReader(`{"title":"Fix bug","source_type":"api","actor":"tester","repository_id":"`+repo.ID+`","repository_ref":"feature/ref","repository_base_branch":"main","metadata":{"repo":"shed"}}`))
 	createReq.Header.Set("Authorization", "Bearer api-secret")
 	create := httptest.NewRecorder()
 	srv.ServeHTTP(create, createReq)
@@ -49,8 +53,16 @@ func TestWorkItemAPI(t *testing.T) {
 	if err := json.NewDecoder(create.Body).Decode(&created); err != nil {
 		t.Fatal(err)
 	}
-	if created.Data.ID == "" || created.Data.State != model.WorkItemQueued {
+	if created.Data.ID == "" || created.Data.State != model.WorkItemQueued || created.Data.RepositoryID != repo.ID || created.Data.RepositoryRef != "feature/ref" {
 		t.Fatalf("created work item=%#v", created.Data)
+	}
+
+	missingRepoReq := httptest.NewRequest(http.MethodPost, "/v1/work-items", strings.NewReader(`{"title":"Missing repo","repository_id":"repo_missing"}`))
+	missingRepoReq.Header.Set("Authorization", "Bearer api-secret")
+	missingRepo := httptest.NewRecorder()
+	srv.ServeHTTP(missingRepo, missingRepoReq)
+	if missingRepo.Code != http.StatusNotFound {
+		t.Fatalf("missing repo status=%d body=%s", missingRepo.Code, missingRepo.Body.String())
 	}
 
 	getReq := httptest.NewRequest(http.MethodGet, "/v1/work-items/"+created.Data.ID, nil)

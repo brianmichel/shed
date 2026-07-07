@@ -35,13 +35,16 @@ type CommandCreate struct {
 }
 
 type WorkItemCreate struct {
-	Title       string            `json:"title"`
-	Description string            `json:"description"`
-	SourceType  string            `json:"source_type"`
-	SourceID    string            `json:"source_id"`
-	Actor       string            `json:"actor"`
-	Priority    int               `json:"priority"`
-	Metadata    map[string]string `json:"metadata"`
+	Title                string            `json:"title"`
+	Description          string            `json:"description"`
+	SourceType           string            `json:"source_type"`
+	SourceID             string            `json:"source_id"`
+	RepositoryID         string            `json:"repository_id"`
+	RepositoryRef        string            `json:"repository_ref"`
+	RepositoryBaseBranch string            `json:"repository_base_branch"`
+	Actor                string            `json:"actor"`
+	Priority             int               `json:"priority"`
+	Metadata             map[string]string `json:"metadata"`
 }
 
 type WorkItemListOptions struct {

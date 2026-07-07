@@ -263,9 +263,16 @@ func (s *PostgresStore) AuthenticateAPIToken(ctx context.Context, token string) 
 
 func (s *PostgresStore) CreateWorkItem(ctx context.Context, in WorkItemCreate) (model.WorkItem, error) {
 	now := time.Now().UTC()
-	item := model.WorkItem{ID: newID("work"), Title: in.Title, Description: in.Description, SourceType: in.SourceType, SourceID: in.SourceID, Actor: in.Actor, State: model.WorkItemQueued, Priority: in.Priority, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	item := model.WorkItem{ID: newID("work"), Title: in.Title, Description: in.Description, SourceType: in.SourceType, SourceID: in.SourceID, RepositoryID: in.RepositoryID, RepositoryRef: in.RepositoryRef, RepositoryBaseBranch: in.RepositoryBaseBranch, Actor: in.Actor, State: model.WorkItemQueued, Priority: in.Priority, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO work_items (id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, item.ID, item.Title, item.Description, item.SourceType, item.SourceID, item.Actor, item.State, item.Priority, jsonParam(item.Metadata), item.InsertedAt, item.UpdatedAt); err != nil {
+		var repositoryID any
+		if item.RepositoryID != "" {
+			repositoryID = item.RepositoryID
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO work_items (id, title, description, source_type, source_id, repository_id, repository_ref, repository_base_branch, actor, state, priority, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, item.ID, item.Title, item.Description, item.SourceType, item.SourceID, repositoryID, item.RepositoryRef, item.RepositoryBaseBranch, item.Actor, item.State, item.Priority, jsonParam(item.Metadata), item.InsertedAt, item.UpdatedAt); err != nil {
+			if strings.Contains(err.Error(), "work_items_repository_id_fkey") {
+				return ErrRepositoryNotFound
+			}
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO factory_event_sequences (work_item_id, next_seq) VALUES ($1, 0)`, item.ID); err != nil {
@@ -278,7 +285,7 @@ func (s *PostgresStore) CreateWorkItem(ctx context.Context, in WorkItemCreate) (
 }
 
 func (s *PostgresStore) ListWorkItems(ctx context.Context, opts WorkItemListOptions) ([]model.WorkItem, error) {
-	query := `SELECT id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at FROM work_items`
+	query := `SELECT id, title, description, source_type, source_id, repository_id, repository_ref, repository_base_branch, actor, state, priority, metadata, inserted_at, updated_at FROM work_items`
 	args := []any{}
 	if opts.State != "" {
 		args = append(args, opts.State)
@@ -303,7 +310,7 @@ func (s *PostgresStore) ListWorkItems(ctx context.Context, opts WorkItemListOpti
 }
 
 func (s *PostgresStore) GetWorkItem(ctx context.Context, workItemID string) (model.WorkItem, error) {
-	item, err := scanWorkItem(s.db.QueryRowContext(ctx, `SELECT id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at FROM work_items WHERE id = $1`, workItemID))
+	item, err := scanWorkItem(s.db.QueryRowContext(ctx, `SELECT id, title, description, source_type, source_id, repository_id, repository_ref, repository_base_branch, actor, state, priority, metadata, inserted_at, updated_at FROM work_items WHERE id = $1`, workItemID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return model.WorkItem{}, ErrWorkItemNotFound
 	}
@@ -314,7 +321,7 @@ func (s *PostgresStore) UpdateWorkItemState(ctx context.Context, workItemID stri
 	var item model.WorkItem
 	err := s.withTx(ctx, func(tx *sql.Tx) error {
 		var err error
-		item, err = scanWorkItem(tx.QueryRowContext(ctx, `UPDATE work_items SET state = $2, updated_at = $3 WHERE id = $1 RETURNING id, title, description, source_type, source_id, actor, state, priority, metadata, inserted_at, updated_at`, workItemID, state, time.Now().UTC()))
+		item, err = scanWorkItem(tx.QueryRowContext(ctx, `UPDATE work_items SET state = $2, updated_at = $3 WHERE id = $1 RETURNING id, title, description, source_type, source_id, repository_id, repository_ref, repository_base_branch, actor, state, priority, metadata, inserted_at, updated_at`, workItemID, state, time.Now().UTC()))
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrWorkItemNotFound
 		}
@@ -925,11 +932,15 @@ func scanCommand(row rowScanner) (model.Command, error) {
 
 func scanWorkItem(row rowScanner) (model.WorkItem, error) {
 	var item model.WorkItem
+	var repositoryID sql.NullString
 	var state string
 	var metadata []byte
-	err := row.Scan(&item.ID, &item.Title, &item.Description, &item.SourceType, &item.SourceID, &item.Actor, &state, &item.Priority, &metadata, &item.InsertedAt, &item.UpdatedAt)
+	err := row.Scan(&item.ID, &item.Title, &item.Description, &item.SourceType, &item.SourceID, &repositoryID, &item.RepositoryRef, &item.RepositoryBaseBranch, &item.Actor, &state, &item.Priority, &metadata, &item.InsertedAt, &item.UpdatedAt)
 	if err != nil {
 		return model.WorkItem{}, err
+	}
+	if repositoryID.Valid {
+		item.RepositoryID = repositoryID.String
 	}
 	item.State = model.WorkItemState(state)
 	if err := scanJSON(metadata, &item.Metadata); err != nil {

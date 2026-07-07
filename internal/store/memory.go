@@ -256,8 +256,13 @@ func (s *MemoryStore) AuthenticateAPIToken(_ context.Context, token string) (mod
 func (s *MemoryStore) CreateWorkItem(_ context.Context, in WorkItemCreate) (model.WorkItem, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if in.RepositoryID != "" {
+		if _, ok := s.repositories[in.RepositoryID]; !ok {
+			return model.WorkItem{}, ErrRepositoryNotFound
+		}
+	}
 	now := time.Now().UTC()
-	item := model.WorkItem{ID: newID("work"), Title: in.Title, Description: in.Description, SourceType: in.SourceType, SourceID: in.SourceID, Actor: in.Actor, State: model.WorkItemQueued, Priority: in.Priority, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	item := model.WorkItem{ID: newID("work"), Title: in.Title, Description: in.Description, SourceType: in.SourceType, SourceID: in.SourceID, RepositoryID: in.RepositoryID, RepositoryRef: in.RepositoryRef, RepositoryBaseBranch: in.RepositoryBaseBranch, Actor: in.Actor, State: model.WorkItemQueued, Priority: in.Priority, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
 	s.workItems[item.ID] = item
 	s.appendFactoryEventLocked(item.ID, "", "server.store", "work_item.created", map[string]any{"state": string(item.State)})
 	return item, nil
