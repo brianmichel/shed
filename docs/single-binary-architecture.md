@@ -211,6 +211,10 @@ Durable stores should preserve:
 - ordered event queries by `(sandbox_id, seq)` and `(sandbox_id, command_id, seq)`.
 - agent token lookup without exposing raw tokens in broad list operations.
 
+## Artifact storage
+
+Artifact metadata is stored through `internal/store.Store`. Artifact bytes use `internal/artifacts.Store`, with a local filesystem implementation that stores content-addressed files and returns `file://` URIs plus SHA-256 content hashes.
+
 ## Server/client protocol
 
 `shed client` connects to `/v1/client/connect?sandbox_id=...` and sends `Authorization: Bearer <agent-token>` in the WebSocket handshake. The token is scoped to the sandbox session, stored hashed by the server, and is not part of the protocol payload.
