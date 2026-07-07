@@ -167,7 +167,7 @@ Acceptance criteria:
 | `SF-056` | `DONE` | `SF-055` | Add diff generation. |
 | `SF-057` | `DONE` | `SF-056` | Add commit creation. |
 | `SF-058` | `DONE` | `SF-057` | Add push branch support behind approval and policy. |
-| `SF-059` | `NOT_STARTED` | `SF-056` | Emit repository lifecycle events. |
+| `SF-059` | `DONE` | `SF-056` | Emit repository lifecycle events. |
 
 Acceptance criteria:
 
