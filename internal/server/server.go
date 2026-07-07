@@ -211,6 +211,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/prepare-repository", s.prepareAgentRunRepository)
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/detect-dirty", s.detectAgentRunDirtyState)
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/generate-diff", s.generateAgentRunDiff)
+	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/create-commit", s.createAgentRunCommit)
 	s.mux.HandleFunc("GET /v1/repositories", s.listRepositories)
 	s.mux.HandleFunc("POST /v1/repositories", s.createRepository)
 	s.mux.HandleFunc("GET /v1/repositories/{repository_id}", s.getRepository)
@@ -460,6 +461,38 @@ func (s *Server) generateAgentRunDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = s.store.AppendFactoryEvent(r.Context(), item.ID, run.ID, "server.repository", "repo.diff.generated", map[string]any{"command_id": cmd.ID})
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
+}
+
+func (s *Server) createAgentRunCommit(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Message string `json:"message"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&in)
+	run, err := s.store.GetAgentRun(r.Context(), r.PathValue("agent_run_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	if run.SandboxID == "" {
+		api.WriteError(w, 409, "sandbox_not_assigned", "Agent run does not have an assigned sandbox", true)
+		return
+	}
+	item, err := s.store.GetWorkItem(r.Context(), run.WorkItemID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	message := strings.TrimSpace(in.Message)
+	if message == "" {
+		message = "Apply agent changes for " + run.ID
+	}
+	cmd, err := s.createAndDispatchCommand(r.Context(), run.SandboxID, store.CommandCreate{Command: "git -C '/workspace/repo' add -A && git -C '/workspace/repo' commit -m " + shellQuote(message), Cwd: "/workspace", TimeoutMS: 2 * 60 * 1000, Metadata: map[string]string{"agent_run_id": run.ID, "work_item_id": item.ID, "step": "commit_create"}})
+	if err != nil {
+		writeCommandDispatchErr(w, err)
+		return
+	}
+	_, _ = s.store.AppendFactoryEvent(r.Context(), item.ID, run.ID, "server.repository", "repo.commit.create.started", map[string]any{"command_id": cmd.ID, "message": message})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
 }
 

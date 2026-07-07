@@ -454,6 +454,59 @@ func TestGenerateAgentRunDiffDispatchesDiffCommand(t *testing.T) {
 	}
 }
 
+func TestCreateAgentRunCommitDispatchesCommitCommand(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "exec"})
+	if err := mgr.RegisterBuiltin("exec", execCompute{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{APIToken: "api-secret", ComputeManager: mgr, DefaultCompute: "exec"}, st)
+	sb, _, err := srv.CreateSandbox(ctx, store.SandboxCreate{Compute: "exec", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "Fix bug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{SandboxID: sb.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent-runs/"+run.ID+"/create-commit", strings.NewReader(`{"message":"Fix user's bug"}`))
+	req.Header.Set("Authorization", "Bearer api-secret")
+	req.SetPathValue("agent_run_id", run.ID)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data model.Command `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body.Data.Command, "git -C '/workspace/repo' add -A") || !strings.Contains(body.Data.Command, "git -C '/workspace/repo' commit -m "+shellQuote("Fix user's bug")) {
+		t.Fatalf("commit command=%q", body.Data.Command)
+	}
+	events, _, err := st.ListAgentRunEvents(ctx, run.ID, store.EventListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Type == "repo.commit.create.started" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("commit event missing: %#v", events)
+	}
+}
+
 func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()

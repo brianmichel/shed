@@ -165,7 +165,7 @@ Acceptance criteria:
 | `SF-054` | `DONE` | `SF-053` | Add branch and worktree preparation. |
 | `SF-055` | `DONE` | `SF-053` | Add dirty state detection. |
 | `SF-056` | `DONE` | `SF-055` | Add diff generation. |
-| `SF-057` | `NOT_STARTED` | `SF-056` | Add commit creation. |
+| `SF-057` | `DONE` | `SF-056` | Add commit creation. |
 | `SF-058` | `NOT_STARTED` | `SF-057` | Add push branch support behind approval and policy. |
 | `SF-059` | `NOT_STARTED` | `SF-056` | Emit repository lifecycle events. |
 
