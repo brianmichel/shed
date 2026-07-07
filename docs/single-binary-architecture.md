@@ -120,7 +120,7 @@ List endpoints support bounded pagination where applicable:
 - `GET /v1/sandboxes/{sandbox_id}/commands?limit=N&offset=N&state=running`
 - event endpoints support `limit=N` in addition to `after=N`.
 
-Work items may include repository checkout intent using `repository_id`, `repository_ref`, and `repository_base_branch`. Repository IDs refer to registered repositories from `/v1/repositories`.
+Work items may include repository checkout intent using `repository_id`, `repository_ref`, and `repository_base_branch`. Repository IDs refer to registered repositories from `/v1/repositories`. Repository preparation creates a per-run working branch named `shed/{agent_run_id}` inside the sandbox checkout.
 
 All JSON errors use a stable machine-readable shape:
 

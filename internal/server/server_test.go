@@ -330,7 +330,7 @@ func TestPrepareAgentRunRepositoryDispatchesCloneCommand(t *testing.T) {
 	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(body.Data.Command, "git clone") || !strings.Contains(body.Data.Command, "git -C '/workspace/repo' checkout 'feature/ref'") {
+	if !strings.Contains(body.Data.Command, "git clone") || !strings.Contains(body.Data.Command, "git -C '/workspace/repo' checkout 'feature/ref'") || !strings.Contains(body.Data.Command, "git -C '/workspace/repo' checkout -B 'shed/"+run.ID+"'") {
 		t.Fatalf("prepare command=%q", body.Data.Command)
 	}
 	events, _, err := st.ListAgentRunEvents(ctx, run.ID, store.EventListOptions{})

@@ -403,16 +403,17 @@ func (s *Server) prepareAgentRunRepository(w http.ResponseWriter, r *http.Reques
 		writeStoreErr(w, err)
 		return
 	}
-	cmd, err := s.createAndDispatchCommand(r.Context(), run.SandboxID, store.CommandCreate{Command: repositoryPrepareCommand(repo, item), Cwd: "/workspace", TimeoutMS: 10 * 60 * 1000, Metadata: map[string]string{"agent_run_id": run.ID, "work_item_id": item.ID, "repository_id": repo.ID, "step": "repository_prepare"}})
+	workBranch := agentRunWorkBranch(run.ID)
+	cmd, err := s.createAndDispatchCommand(r.Context(), run.SandboxID, store.CommandCreate{Command: repositoryPrepareCommand(repo, item, workBranch), Cwd: "/workspace", TimeoutMS: 10 * 60 * 1000, Metadata: map[string]string{"agent_run_id": run.ID, "work_item_id": item.ID, "repository_id": repo.ID, "work_branch": workBranch, "step": "repository_prepare"}})
 	if err != nil {
 		writeCommandDispatchErr(w, err)
 		return
 	}
-	_, _ = s.store.AppendFactoryEvent(r.Context(), item.ID, run.ID, "server.repository", "repo.prepare.started", map[string]any{"repository_id": repo.ID, "command_id": cmd.ID, "ref": item.RepositoryRef, "base_branch": item.RepositoryBaseBranch})
+	_, _ = s.store.AppendFactoryEvent(r.Context(), item.ID, run.ID, "server.repository", "repo.prepare.started", map[string]any{"repository_id": repo.ID, "command_id": cmd.ID, "ref": item.RepositoryRef, "base_branch": item.RepositoryBaseBranch, "work_branch": workBranch})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
 }
 
-func repositoryPrepareCommand(repo model.Repository, item model.WorkItem) string {
+func repositoryPrepareCommand(repo model.Repository, item model.WorkItem, workBranch string) string {
 	dir := "/workspace/repo"
 	branch := item.RepositoryBaseBranch
 	if branch == "" {
@@ -426,7 +427,12 @@ func repositoryPrepareCommand(repo model.Repository, item model.WorkItem) string
 	if item.RepositoryRef != "" && item.RepositoryRef != branch {
 		parts = append(parts, "git -C "+shellQuote(dir)+" checkout "+shellQuote(item.RepositoryRef))
 	}
+	parts = append(parts, "git -C "+shellQuote(dir)+" checkout -B "+shellQuote(workBranch))
 	return strings.Join(parts, "; ")
+}
+
+func agentRunWorkBranch(agentRunID string) string {
+	return "shed/" + agentRunID
 }
 
 func shellQuote(v string) string {
