@@ -54,6 +54,15 @@ type clientConn struct {
 	mu      sync.Mutex
 }
 
+type commandDispatchError struct {
+	status  int
+	code    string
+	message string
+	retry   bool
+}
+
+func (e commandDispatchError) Error() string { return e.message }
+
 func New(cfg Config, st store.Store) *Server {
 	if cfg.Addr == "" {
 		cfg.Addr = "127.0.0.1:6464"
@@ -199,6 +208,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}", s.getAgentRun)
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/cancel", s.cancelAgentRun)
 	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}/events", s.agentRunEvents)
+	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/prepare-repository", s.prepareAgentRunRepository)
 	s.mux.HandleFunc("GET /v1/repositories", s.listRepositories)
 	s.mux.HandleFunc("POST /v1/repositories", s.createRepository)
 	s.mux.HandleFunc("GET /v1/repositories/{repository_id}", s.getRepository)
@@ -367,6 +377,60 @@ func (s *Server) agentRunEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeEvents(w, r, events, next)
+}
+
+func (s *Server) prepareAgentRunRepository(w http.ResponseWriter, r *http.Request) {
+	run, err := s.store.GetAgentRun(r.Context(), r.PathValue("agent_run_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	if run.SandboxID == "" {
+		api.WriteError(w, 409, "sandbox_not_assigned", "Agent run does not have an assigned sandbox", true)
+		return
+	}
+	item, err := s.store.GetWorkItem(r.Context(), run.WorkItemID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	if item.RepositoryID == "" {
+		api.WriteError(w, 422, "repository_not_configured", "Work item does not include repository checkout configuration", false)
+		return
+	}
+	repo, err := s.store.GetRepository(r.Context(), item.RepositoryID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	cmd, err := s.createAndDispatchCommand(r.Context(), run.SandboxID, store.CommandCreate{Command: repositoryPrepareCommand(repo, item), Cwd: "/workspace", TimeoutMS: 10 * 60 * 1000, Metadata: map[string]string{"agent_run_id": run.ID, "work_item_id": item.ID, "repository_id": repo.ID, "step": "repository_prepare"}})
+	if err != nil {
+		writeCommandDispatchErr(w, err)
+		return
+	}
+	_, _ = s.store.AppendFactoryEvent(r.Context(), item.ID, run.ID, "server.repository", "repo.prepare.started", map[string]any{"repository_id": repo.ID, "command_id": cmd.ID, "ref": item.RepositoryRef, "base_branch": item.RepositoryBaseBranch})
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
+}
+
+func repositoryPrepareCommand(repo model.Repository, item model.WorkItem) string {
+	dir := "/workspace/repo"
+	branch := item.RepositoryBaseBranch
+	if branch == "" {
+		branch = repo.DefaultBranch
+	}
+	parts := []string{"set -e", "rm -rf " + shellQuote(dir), "git clone"}
+	if branch != "" {
+		parts[len(parts)-1] += " --branch " + shellQuote(branch)
+	}
+	parts[len(parts)-1] += " " + shellQuote(repo.CloneURL) + " " + shellQuote(dir)
+	if item.RepositoryRef != "" && item.RepositoryRef != branch {
+		parts = append(parts, "git -C "+shellQuote(dir)+" checkout "+shellQuote(item.RepositoryRef))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func shellQuote(v string) string {
+	return "'" + strings.ReplaceAll(v, "'", "'\"'\"'") + "'"
 }
 
 func (s *Server) createRepository(w http.ResponseWriter, r *http.Request) {
@@ -562,36 +626,49 @@ func (s *Server) createCommand(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, 422, "invalid_request", "command is required", false)
 		return
 	}
-	sess, err := s.store.FindSessionBySandbox(r.Context(), id)
+	cmd, err := s.createAndDispatchCommand(r.Context(), id, in)
 	if err != nil {
-		writeStoreErr(w, err)
+		writeCommandDispatchErr(w, err)
 		return
+	}
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
+}
+
+func (s *Server) createAndDispatchCommand(ctx context.Context, sandboxID string, in store.CommandCreate) (model.Command, error) {
+	sess, err := s.store.FindSessionBySandbox(ctx, sandboxID)
+	if err != nil {
+		return model.Command{}, err
 	}
 	cc := s.getClient(sess.SessionID)
-	sb, err := s.store.GetSandbox(r.Context(), id)
+	sb, err := s.store.GetSandbox(ctx, sandboxID)
 	if err != nil {
-		writeStoreErr(w, err)
-		return
+		return model.Command{}, err
 	}
-	if cc == nil && !s.allocMgr.SupportsExec(r.Context(), sb.Compute, sb.ComputeAPIVersion) {
-		api.WriteError(w, 409, "client_not_connected", "Client is not connected and compute driver does not support exec", true)
-		return
+	if cc == nil && !s.allocMgr.SupportsExec(ctx, sb.Compute, sb.ComputeAPIVersion) {
+		return model.Command{}, commandDispatchError{status: 409, code: "client_not_connected", message: "Client is not connected and compute driver does not support exec", retry: true}
 	}
-	cmd, err := s.store.CreateCommand(r.Context(), id, in)
+	cmd, err := s.store.CreateCommand(ctx, sandboxID, in)
 	if err != nil {
-		writeStoreErr(w, err)
-		return
+		return model.Command{}, err
 	}
 	if cc != nil {
 		if err := cc.send("command.start", map[string]any{"command_id": cmd.ID, "command": cmd.Command, "cwd": cmd.Cwd, "env": cmd.Env, "stdin": cmd.Stdin, "timeout_ms": cmd.TimeoutMS}); err != nil {
-			api.WriteError(w, 502, "dispatch_failed", err.Error(), true)
-			return
+			return model.Command{}, commandDispatchError{status: 502, code: "dispatch_failed", message: err.Error(), retry: true}
 		}
 	} else {
 		go s.execViaCompute(context.Background(), sb, cmd)
 	}
-	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
+	return cmd, nil
 }
+
+func writeCommandDispatchErr(w http.ResponseWriter, err error) {
+	if de, ok := err.(commandDispatchError); ok {
+		api.WriteError(w, de.status, de.code, de.message, de.retry)
+		return
+	}
+	writeStoreErr(w, err)
+}
+
 func (s *Server) execViaCompute(ctx context.Context, sb model.Sandbox, cmd model.Command) {
 	err := s.allocMgr.Exec(ctx, sb.Compute, compute.ExecRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: cmd.ID, Command: cmd.Command, Cwd: cmd.Cwd, Env: cmd.Env, Stdin: cmd.Stdin, TimeoutMS: cmd.TimeoutMS, Config: sb.ComputeConfig, Metadata: cmd.Metadata}, func(ev compute.ExecEvent) error {
 		if ev.CommandID == "" {

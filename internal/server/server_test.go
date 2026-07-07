@@ -291,6 +291,63 @@ func TestRepositoryAPI(t *testing.T) {
 	}
 }
 
+func TestPrepareAgentRunRepositoryDispatchesCloneCommand(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	mgr := compute.NewManager(compute.ManagerConfig{DefaultCompute: "exec"})
+	if err := mgr.RegisterBuiltin("exec", execCompute{}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(Config{APIToken: "api-secret", ComputeManager: mgr, DefaultCompute: "exec"}, st)
+	sb, _, err := srv.CreateSandbox(ctx, store.SandboxCreate{Compute: "exec", TTL: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := st.CreateRepository(ctx, store.RepositoryCreate{Name: "shed", Provider: "github", CloneURL: "https://github.com/brianmichel/shed.git", DefaultBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "Fix bug", RepositoryID: repo.ID, RepositoryRef: "feature/ref", RepositoryBaseBranch: "main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{SandboxID: sb.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/agent-runs/"+run.ID+"/prepare-repository", nil)
+	req.Header.Set("Authorization", "Bearer api-secret")
+	req.SetPathValue("agent_run_id", run.ID)
+	w := httptest.NewRecorder()
+	srv.ServeHTTP(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Data model.Command `json:"data"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(body.Data.Command, "git clone") || !strings.Contains(body.Data.Command, "git -C '/workspace/repo' checkout 'feature/ref'") {
+		t.Fatalf("prepare command=%q", body.Data.Command)
+	}
+	events, _, err := st.ListAgentRunEvents(ctx, run.ID, store.EventListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ev := range events {
+		if ev.Type == "repo.prepare.started" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("repo prepare event missing: %#v", events)
+	}
+}
+
 func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()
