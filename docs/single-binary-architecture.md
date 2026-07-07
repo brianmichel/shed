@@ -97,9 +97,11 @@ Core endpoints:
 - `POST /v1/agent-runs/{agent_run_id}/generate-diff` — generate a sandbox diff for the prepared repository.
 - `POST /v1/agent-runs/{agent_run_id}/create-commit` — create a Git commit in the prepared repository.
 - `POST /v1/agent-runs/{agent_run_id}/push-branch` — push the per-run branch after explicit approval.
+- `GET /v1/agent-runs/{agent_run_id}/artifacts`
 - `POST /v1/repositories` — register a repository target for factory work.
 - `GET /v1/repositories`
 - `GET /v1/repositories/{repository_id}`
+- `GET /v1/artifacts/{artifact_id}`
 - `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, and call the selected compute driver.
 - `GET /v1/sandboxes`
 - `GET /v1/sandboxes/{sandbox_id}`

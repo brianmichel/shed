@@ -179,11 +179,11 @@ Acceptance criteria:
 
 | ID | State | Depends On | Task |
 |---|---|---|---|
-| `SF-060` | `NOT_STARTED` | `SF-013` | Add `Artifact` model. |
+| `SF-060` | `DONE` | `SF-013` | Add `Artifact` model. |
 | `SF-061` | `NOT_STARTED` | `SF-060` | Add artifact store abstraction. |
 | `SF-062` | `NOT_STARTED` | `SF-061` | Implement local filesystem artifact store. |
 | `SF-063` | `NOT_STARTED` | `SF-061` | Add metadata-only artifact references for external URLs such as GitHub PRs. |
-| `SF-064` | `NOT_STARTED` | `SF-060` | Add artifact API list and read endpoints. |
+| `SF-064` | `DONE` | `SF-060` | Add artifact API list and read endpoints. |
 | `SF-065` | `NOT_STARTED` | `SF-060` | Capture diffs as artifacts. |
 | `SF-066` | `NOT_STARTED` | `SF-060` | Capture validation logs as artifacts. |
 | `SF-067` | `NOT_STARTED` | `SF-060` | Capture final run summary as artifact. |

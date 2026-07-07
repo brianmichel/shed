@@ -23,6 +23,7 @@ var (
 	ErrWorkItemNotFound   = errors.New("work_item_not_found")
 	ErrAgentRunNotFound   = errors.New("agent_run_not_found")
 	ErrRepositoryNotFound = errors.New("repository_not_found")
+	ErrArtifactNotFound   = errors.New("artifact_not_found")
 )
 
 type MemoryStore struct {
@@ -34,6 +35,7 @@ type MemoryStore struct {
 	workItems      map[string]model.WorkItem
 	agentRuns      map[string]model.AgentRun
 	repositories   map[string]model.Repository
+	artifacts      map[string]model.Artifact
 	events         map[string][]model.Event
 	nextSeq        map[string]int64
 	factoryEvents  map[string][]model.Event
@@ -50,6 +52,7 @@ func NewMemoryStore() *MemoryStore {
 		workItems:      map[string]model.WorkItem{},
 		agentRuns:      map[string]model.AgentRun{},
 		repositories:   map[string]model.Repository{},
+		artifacts:      map[string]model.Artifact{},
 		events:         map[string][]model.Event{},
 		nextSeq:        map[string]int64{},
 		factoryEvents:  map[string][]model.Event{},
@@ -459,6 +462,58 @@ func (s *MemoryStore) GetRepository(_ context.Context, repositoryID string) (mod
 		return model.Repository{}, ErrRepositoryNotFound
 	}
 	return repo, nil
+}
+
+func (s *MemoryStore) CreateArtifact(_ context.Context, in ArtifactCreate) (model.Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.workItems[in.WorkItemID]; !ok {
+		return model.Artifact{}, ErrWorkItemNotFound
+	}
+	if in.AgentRunID != "" {
+		if _, ok := s.agentRuns[in.AgentRunID]; !ok {
+			return model.Artifact{}, ErrAgentRunNotFound
+		}
+	}
+	if in.SandboxID != "" {
+		if _, ok := s.sandboxes[in.SandboxID]; !ok {
+			return model.Artifact{}, ErrSandboxNotFound
+		}
+	}
+	now := time.Now().UTC()
+	artifact := model.Artifact{ID: newID("art"), WorkItemID: in.WorkItemID, AgentRunID: in.AgentRunID, SandboxID: in.SandboxID, Type: in.Type, URI: in.URI, ContentHash: in.ContentHash, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	s.artifacts[artifact.ID] = artifact
+	return artifact, nil
+}
+
+func (s *MemoryStore) ListArtifacts(_ context.Context, opts ArtifactListOptions) ([]model.Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.Artifact, 0, len(s.artifacts))
+	for _, artifact := range s.artifacts {
+		if opts.WorkItemID != "" && artifact.WorkItemID != opts.WorkItemID {
+			continue
+		}
+		if opts.AgentRunID != "" && artifact.AgentRunID != opts.AgentRunID {
+			continue
+		}
+		if opts.Type != "" && artifact.Type != opts.Type {
+			continue
+		}
+		out = append(out, artifact)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InsertedAt.After(out[j].InsertedAt) })
+	return pageSlice(out, opts.Page), nil
+}
+
+func (s *MemoryStore) GetArtifact(_ context.Context, artifactID string) (model.Artifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	artifact, ok := s.artifacts[artifactID]
+	if !ok {
+		return model.Artifact{}, ErrArtifactNotFound
+	}
+	return artifact, nil
 }
 
 func (s *MemoryStore) CreateCommand(_ context.Context, sandboxID string, in CommandCreate) (model.Command, error) {

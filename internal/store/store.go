@@ -81,6 +81,23 @@ type RepositoryListOptions struct {
 	Provider string
 }
 
+type ArtifactCreate struct {
+	WorkItemID  string
+	AgentRunID  string
+	SandboxID   string
+	Type        string
+	URI         string
+	ContentHash string
+	Metadata    map[string]string
+}
+
+type ArtifactListOptions struct {
+	Page       Page
+	WorkItemID string
+	AgentRunID string
+	Type       string
+}
+
 type APITokenCreate struct {
 	Name     string
 	Metadata map[string]string
@@ -143,6 +160,10 @@ type Store interface {
 	CreateRepository(ctx context.Context, in RepositoryCreate) (model.Repository, error)
 	ListRepositories(ctx context.Context, opts RepositoryListOptions) ([]model.Repository, error)
 	GetRepository(ctx context.Context, repositoryID string) (model.Repository, error)
+
+	CreateArtifact(ctx context.Context, in ArtifactCreate) (model.Artifact, error)
+	ListArtifacts(ctx context.Context, opts ArtifactListOptions) ([]model.Artifact, error)
+	GetArtifact(ctx context.Context, artifactID string) (model.Artifact, error)
 
 	CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error)
 	ListCommands(ctx context.Context, sandboxID string, opts CommandListOptions) ([]model.Command, error)

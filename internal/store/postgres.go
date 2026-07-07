@@ -550,6 +550,76 @@ func (s *PostgresStore) GetRepository(ctx context.Context, repositoryID string) 
 	return repo, err
 }
 
+func (s *PostgresStore) CreateArtifact(ctx context.Context, in ArtifactCreate) (model.Artifact, error) {
+	now := time.Now().UTC()
+	artifact := model.Artifact{ID: newID("art"), WorkItemID: in.WorkItemID, AgentRunID: in.AgentRunID, SandboxID: in.SandboxID, Type: in.Type, URI: in.URI, ContentHash: in.ContentHash, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	var agentRunID, sandboxID any
+	if artifact.AgentRunID != "" {
+		agentRunID = artifact.AgentRunID
+	}
+	if artifact.SandboxID != "" {
+		sandboxID = artifact.SandboxID
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO artifacts (id, work_item_id, agent_run_id, sandbox_id, type, uri, content_hash, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, artifact.ID, artifact.WorkItemID, agentRunID, sandboxID, artifact.Type, artifact.URI, artifact.ContentHash, jsonParam(artifact.Metadata), artifact.InsertedAt, artifact.UpdatedAt)
+	if err != nil {
+		if strings.Contains(err.Error(), "artifacts_work_item_id_fkey") {
+			return model.Artifact{}, ErrWorkItemNotFound
+		}
+		if strings.Contains(err.Error(), "artifacts_agent_run_id_fkey") {
+			return model.Artifact{}, ErrAgentRunNotFound
+		}
+		if strings.Contains(err.Error(), "artifacts_sandbox_id_fkey") {
+			return model.Artifact{}, ErrSandboxNotFound
+		}
+	}
+	return artifact, err
+}
+
+func (s *PostgresStore) ListArtifacts(ctx context.Context, opts ArtifactListOptions) ([]model.Artifact, error) {
+	query := `SELECT id, work_item_id, agent_run_id, sandbox_id, type, uri, content_hash, metadata, inserted_at, updated_at FROM artifacts`
+	where := []string{}
+	args := []any{}
+	if opts.WorkItemID != "" {
+		args = append(args, opts.WorkItemID)
+		where = append(where, fmt.Sprintf("work_item_id = $%d", len(args)))
+	}
+	if opts.AgentRunID != "" {
+		args = append(args, opts.AgentRunID)
+		where = append(where, fmt.Sprintf("agent_run_id = $%d", len(args)))
+	}
+	if opts.Type != "" {
+		args = append(args, opts.Type)
+		where = append(where, fmt.Sprintf("type = $%d", len(args)))
+	}
+	if len(where) > 0 {
+		query += " WHERE " + strings.Join(where, " AND ")
+	}
+	query += " ORDER BY inserted_at DESC"
+	query, args = appendPage(query, args, opts.Page)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Artifact{}
+	for rows.Next() {
+		artifact, err := scanArtifact(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, artifact)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) GetArtifact(ctx context.Context, artifactID string) (model.Artifact, error) {
+	artifact, err := scanArtifact(s.db.QueryRowContext(ctx, `SELECT id, work_item_id, agent_run_id, sandbox_id, type, uri, content_hash, metadata, inserted_at, updated_at FROM artifacts WHERE id = $1`, artifactID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Artifact{}, ErrArtifactNotFound
+	}
+	return artifact, err
+}
+
 func (s *PostgresStore) CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error) {
 	now := time.Now().UTC()
 	if in.Cwd == "" {
@@ -986,6 +1056,26 @@ func scanRepository(row rowScanner) (model.Repository, error) {
 		return model.Repository{}, err
 	}
 	return repo, nil
+}
+
+func scanArtifact(row rowScanner) (model.Artifact, error) {
+	var artifact model.Artifact
+	var agentRunID, sandboxID sql.NullString
+	var metadata []byte
+	err := row.Scan(&artifact.ID, &artifact.WorkItemID, &agentRunID, &sandboxID, &artifact.Type, &artifact.URI, &artifact.ContentHash, &metadata, &artifact.InsertedAt, &artifact.UpdatedAt)
+	if err != nil {
+		return model.Artifact{}, err
+	}
+	if agentRunID.Valid {
+		artifact.AgentRunID = agentRunID.String
+	}
+	if sandboxID.Valid {
+		artifact.SandboxID = sandboxID.String
+	}
+	if err := scanJSON(metadata, &artifact.Metadata); err != nil {
+		return model.Artifact{}, err
+	}
+	return artifact, nil
 }
 
 func scanEvent(row rowScanner) (model.Event, error) {

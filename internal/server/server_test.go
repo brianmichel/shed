@@ -236,6 +236,51 @@ func TestAgentRunAPI(t *testing.T) {
 	}
 }
 
+func TestArtifactAPI(t *testing.T) {
+	ctx := context.Background()
+	st := store.NewMemoryStore()
+	srv := New(Config{APIToken: "api-secret"}, st)
+	item, err := st.CreateWorkItem(ctx, store.WorkItemCreate{Title: "Fix bug"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := st.CreateAgentRun(ctx, item.ID, store.AgentRunCreate{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifact, err := st.CreateArtifact(ctx, store.ArtifactCreate{WorkItemID: item.ID, AgentRunID: run.ID, Type: "diff", URI: "memory://diff.patch", ContentHash: "sha256:test", Metadata: map[string]string{"kind": "patch"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/agent-runs/"+run.ID+"/artifacts?type=diff", nil)
+	listReq.Header.Set("Authorization", "Bearer api-secret")
+	listReq.SetPathValue("agent_run_id", run.ID)
+	list := httptest.NewRecorder()
+	srv.ServeHTTP(list, listReq)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	var listed struct {
+		Data []model.Artifact `json:"data"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Data) != 1 || listed.Data[0].ID != artifact.ID {
+		t.Fatalf("listed artifacts=%#v", listed.Data)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/artifacts/"+artifact.ID, nil)
+	getReq.Header.Set("Authorization", "Bearer api-secret")
+	getReq.SetPathValue("artifact_id", artifact.ID)
+	get := httptest.NewRecorder()
+	srv.ServeHTTP(get, getReq)
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", get.Code, get.Body.String())
+	}
+}
+
 func TestRepositoryAPI(t *testing.T) {
 	srv := New(Config{APIToken: "api-secret"}, store.NewMemoryStore())
 

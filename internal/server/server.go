@@ -206,6 +206,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/work-items/{work_item_id}/runs", s.createAgentRun)
 	s.mux.HandleFunc("GET /v1/agent-runs", s.listAgentRuns)
 	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}", s.getAgentRun)
+	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}/artifacts", s.listAgentRunArtifacts)
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/cancel", s.cancelAgentRun)
 	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}/events", s.agentRunEvents)
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/prepare-repository", s.prepareAgentRunRepository)
@@ -216,6 +217,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/repositories", s.listRepositories)
 	s.mux.HandleFunc("POST /v1/repositories", s.createRepository)
 	s.mux.HandleFunc("GET /v1/repositories/{repository_id}", s.getRepository)
+	s.mux.HandleFunc("GET /v1/artifacts/{artifact_id}", s.getArtifact)
 	s.mux.HandleFunc("GET /v1/sandboxes", s.listSandboxes)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.createSandbox)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}", s.getSandbox)
@@ -363,6 +365,19 @@ func (s *Server) getAgentRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.WriteJSON(w, 200, map[string]any{"data": run})
+}
+
+func (s *Server) listAgentRunArtifacts(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.store.GetAgentRun(r.Context(), r.PathValue("agent_run_id")); err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	artifacts, err := s.store.ListArtifacts(r.Context(), store.ArtifactListOptions{Page: parsePage(r), AgentRunID: r.PathValue("agent_run_id"), Type: r.URL.Query().Get("type")})
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": artifacts})
 }
 
 func (s *Server) cancelAgentRun(w http.ResponseWriter, r *http.Request) {
@@ -586,6 +601,15 @@ func (s *Server) getRepository(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	api.WriteJSON(w, 200, map[string]any{"data": repo})
+}
+
+func (s *Server) getArtifact(w http.ResponseWriter, r *http.Request) {
+	artifact, err := s.store.GetArtifact(r.Context(), r.PathValue("artifact_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": artifact})
 }
 
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
@@ -1164,6 +1188,8 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		api.WriteError(w, 404, "agent_run_not_found", "Agent run not found", false)
 	case errors.Is(err, store.ErrRepositoryNotFound):
 		api.WriteError(w, 404, "repository_not_found", "Repository not found", false)
+	case errors.Is(err, store.ErrArtifactNotFound):
+		api.WriteError(w, 404, "artifact_not_found", "Artifact not found", false)
 	default:
 		api.WriteError(w, 422, err.Error(), "Request failed", false)
 	}

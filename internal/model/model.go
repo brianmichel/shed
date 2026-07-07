@@ -139,6 +139,19 @@ type Repository struct {
 	UpdatedAt     time.Time         `json:"updated_at"`
 }
 
+type Artifact struct {
+	ID          string            `json:"id"`
+	WorkItemID  string            `json:"work_item_id"`
+	AgentRunID  string            `json:"agent_run_id,omitempty"`
+	SandboxID   string            `json:"sandbox_id,omitempty"`
+	Type        string            `json:"type"`
+	URI         string            `json:"uri"`
+	ContentHash string            `json:"content_hash,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	InsertedAt  time.Time         `json:"inserted_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
 type AgentRun struct {
 	ID          string            `json:"id"`
 	WorkItemID  string            `json:"work_item_id"`
