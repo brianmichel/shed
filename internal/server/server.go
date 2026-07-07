@@ -15,6 +15,7 @@ import (
 
 	"github.com/brianmichel/shed/internal/api"
 	"github.com/brianmichel/shed/internal/compute"
+	"github.com/brianmichel/shed/internal/job"
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/protocol"
 	"github.com/brianmichel/shed/internal/store"
@@ -39,6 +40,7 @@ type Server struct {
 	mu       sync.Mutex
 	clients  map[string]*clientConn
 	allocMgr *compute.Manager
+	jobMgr   *job.Manager
 }
 
 type clientConn struct {
@@ -69,6 +71,10 @@ func New(cfg Config, st store.Store) *Server {
 	s.routes()
 	return s
 }
+
+// SetJobManager wires the job orchestrator into the server. Job API routes
+// return 501 until this is called.
+func (s *Server) SetJobManager(m *job.Manager) { s.jobMgr = m }
 
 func (s *Server) Store() store.Store { return s.store }
 func (s *Server) Addr() string {
@@ -278,6 +284,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/sandboxes/{sandbox_id}/commands/{command_id}/cancel", s.cancelCommand)
 	s.mux.HandleFunc("POST /v1/sandboxes/{sandbox_id}/commands/{command_id}/kill", s.killCommand)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}/commands/{command_id}/events", s.commandEvents)
+	s.mux.HandleFunc("POST /v1/jobs", s.createJob)
+	s.mux.HandleFunc("GET /v1/jobs", s.listJobs)
+	s.mux.HandleFunc("GET /v1/jobs/{job_id}", s.getJob)
+	s.mux.HandleFunc("POST /v1/jobs/{job_id}/cancel", s.cancelJob)
+	s.mux.HandleFunc("GET /v1/jobs/{job_id}/events", s.jobEvents)
 	s.mux.HandleFunc("GET /v1/client/connect", s.clientConnect)
 	s.mux.Handle("/ui/", ui.Handler(s.cfg.UIEnabled))
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -332,6 +343,92 @@ func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": sb, "client_session": sess, "connect_url": s.ClientURL()})
 }
+func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
+	if s.jobMgr == nil {
+		api.WriteError(w, http.StatusNotImplemented, "jobs_not_enabled", "Job orchestration is not enabled", false)
+		return
+	}
+	var in struct {
+		Repo         string            `json:"repo"`
+		BaseRef      string            `json:"base_ref"`
+		WorkBranch   string            `json:"work_branch"`
+		Prompt       string            `json:"prompt"`
+		ComputeClass string            `json:"compute_class"`
+		AgentDriver  string            `json:"agent_driver"`
+		ScmDriver    string            `json:"scm_driver"`
+		Metadata     map[string]string `json:"metadata"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Repo == "" || in.Prompt == "" {
+		api.WriteError(w, 422, "invalid_request", "repo and prompt are required", false)
+		return
+	}
+	j, err := s.jobMgr.Start(r.Context(), job.CreateJobRequest{
+		Repo:         in.Repo,
+		BaseRef:      in.BaseRef,
+		WorkBranch:   in.WorkBranch,
+		Prompt:       in.Prompt,
+		ComputeClass: in.ComputeClass,
+		AgentDriver:  in.AgentDriver,
+		ScmDriver:    in.ScmDriver,
+		Trigger:      model.JobTrigger{Source: "manual"},
+		Metadata:     in.Metadata,
+	})
+	if err != nil {
+		api.WriteError(w, http.StatusBadGateway, "job_start_failed", err.Error(), true)
+		return
+	}
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": j})
+}
+func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
+	xs, err := s.store.ListJobs(r.Context())
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": xs})
+}
+func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
+	j, err := s.store.GetJob(r.Context(), r.PathValue("job_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": j})
+}
+func (s *Server) cancelJob(w http.ResponseWriter, r *http.Request) {
+	if s.jobMgr == nil {
+		api.WriteError(w, http.StatusNotImplemented, "jobs_not_enabled", "Job orchestration is not enabled", false)
+		return
+	}
+	j, err := s.jobMgr.Cancel(r.Context(), r.PathValue("job_id"))
+	if err != nil {
+		if errors.Is(err, job.ErrJobNotCancellable) {
+			api.WriteError(w, 409, "job_not_cancellable", "Job is not cancellable", false)
+			return
+		}
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": j})
+}
+func (s *Server) jobEvents(w http.ResponseWriter, r *http.Request) {
+	j, err := s.store.GetJob(r.Context(), r.PathValue("job_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	if j.SandboxID == "" {
+		writeEvents(w, r, []model.Event{}, parseAfter(r))
+		return
+	}
+	events, next, err := s.store.ListSandboxEvents(r.Context(), j.SandboxID, parseAfter(r))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	writeEvents(w, r, events, next)
+}
+
 func (s *Server) listSandboxes(w http.ResponseWriter, r *http.Request) {
 	xs, err := s.store.ListSandboxes(r.Context())
 	if err != nil {
@@ -351,22 +448,32 @@ func (s *Server) getSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 	api.WriteJSON(w, 200, map[string]any{"data": sb})
 }
+
+// ReleaseSandbox marks sandboxID as releasing, calls the compute driver's
+// Release, closes any connected client, and marks the sandbox released. It is
+// the shared entry point used by the HTTP release API and by internal
+// callers such as the job orchestrator.
+func (s *Server) ReleaseSandbox(ctx context.Context, sandboxID, reason string) (model.Sandbox, error) {
+	sb, err := s.store.UpdateSandboxState(ctx, sandboxID, model.SandboxReleasing)
+	if err != nil {
+		return model.Sandbox{}, err
+	}
+	_, err = s.allocMgr.Release(ctx, sb.Compute, compute.ReleaseRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, Config: sb.ComputeConfig, Reason: reason})
+	if err != nil {
+		return model.Sandbox{}, err
+	}
+	s.closeClientForSandbox(sandboxID)
+	return s.store.UpdateSandboxState(ctx, sandboxID, model.SandboxReleased)
+}
+
 func (s *Server) releaseSandbox(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("sandbox_id")
-	sb, err := s.store.UpdateSandboxState(r.Context(), id, model.SandboxReleasing)
+	sb, err := s.ReleaseSandbox(r.Context(), r.PathValue("sandbox_id"), "api_release")
 	if err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	_, err = s.allocMgr.Release(r.Context(), sb.Compute, compute.ReleaseRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, Config: sb.ComputeConfig, Reason: "api_release"})
-	if err != nil {
+		if errors.Is(err, store.ErrSandboxNotFound) {
+			writeStoreErr(w, err)
+			return
+		}
 		api.WriteError(w, http.StatusBadGateway, "compute_release_failed", err.Error(), true)
-		return
-	}
-	s.closeClientForSandbox(id)
-	sb, err = s.store.UpdateSandboxState(r.Context(), id, model.SandboxReleased)
-	if err != nil {
-		writeStoreErr(w, err)
 		return
 	}
 	api.WriteJSON(w, 200, map[string]any{"data": sb})
@@ -463,6 +570,41 @@ func (s *Server) fileRequest(w http.ResponseWriter, r *http.Request, msgType str
 	api.WriteJSON(w, 200, map[string]any{"data": response.Payload})
 }
 
+// ErrClientNotConnected is returned by DispatchCommand when no client is
+// connected for the sandbox and the compute driver does not support direct exec.
+var ErrClientNotConnected = errors.New("client_not_connected")
+
+// DispatchCommand creates a command against sandboxID and dispatches it to the
+// connected shed client (over websocket) or to the compute driver's Exec path.
+// It is the shared entry point used by the HTTP command API and by internal
+// callers such as the job orchestrator.
+func (s *Server) DispatchCommand(ctx context.Context, sandboxID string, in store.CommandCreate) (model.Command, error) {
+	sess, err := s.store.FindSessionBySandbox(ctx, sandboxID)
+	if err != nil {
+		return model.Command{}, err
+	}
+	cc := s.getClient(sess.SessionID)
+	sb, err := s.store.GetSandbox(ctx, sandboxID)
+	if err != nil {
+		return model.Command{}, err
+	}
+	if cc == nil && !s.allocMgr.SupportsExec(ctx, sb.Compute, sb.ComputeAPIVersion) {
+		return model.Command{}, ErrClientNotConnected
+	}
+	cmd, err := s.store.CreateCommand(ctx, sandboxID, in)
+	if err != nil {
+		return model.Command{}, err
+	}
+	if cc != nil {
+		if err := cc.send("command.start", map[string]any{"command_id": cmd.ID, "command": cmd.Command, "cwd": cmd.Cwd, "env": cmd.Env, "stdin": cmd.Stdin, "timeout_ms": cmd.TimeoutMS}); err != nil {
+			return model.Command{}, err
+		}
+	} else {
+		go s.execViaCompute(context.Background(), sb, cmd)
+	}
+	return cmd, nil
+}
+
 func (s *Server) createCommand(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("sandbox_id")
 	var in store.CommandCreate
@@ -470,33 +612,17 @@ func (s *Server) createCommand(w http.ResponseWriter, r *http.Request) {
 		api.WriteError(w, 422, "invalid_request", "command is required", false)
 		return
 	}
-	sess, err := s.store.FindSessionBySandbox(r.Context(), id)
+	cmd, err := s.DispatchCommand(r.Context(), id, in)
 	if err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	cc := s.getClient(sess.SessionID)
-	sb, err := s.store.GetSandbox(r.Context(), id)
-	if err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	if cc == nil && !s.allocMgr.SupportsExec(r.Context(), sb.Compute, sb.ComputeAPIVersion) {
-		api.WriteError(w, 409, "client_not_connected", "Client is not connected and compute driver does not support exec", true)
-		return
-	}
-	cmd, err := s.store.CreateCommand(r.Context(), id, in)
-	if err != nil {
-		writeStoreErr(w, err)
-		return
-	}
-	if cc != nil {
-		if err := cc.send("command.start", map[string]any{"command_id": cmd.ID, "command": cmd.Command, "cwd": cmd.Cwd, "env": cmd.Env, "stdin": cmd.Stdin, "timeout_ms": cmd.TimeoutMS}); err != nil {
+		switch {
+		case errors.Is(err, ErrClientNotConnected):
+			api.WriteError(w, 409, "client_not_connected", "Client is not connected and compute driver does not support exec", true)
+		case errors.Is(err, store.ErrSandboxNotFound), errors.Is(err, store.ErrSessionNotFound):
+			writeStoreErr(w, err)
+		default:
 			api.WriteError(w, 502, "dispatch_failed", err.Error(), true)
-			return
 		}
-	} else {
-		go s.execViaCompute(context.Background(), sb, cmd)
+		return
 	}
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
 }
@@ -814,6 +940,8 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		api.WriteError(w, 404, "command_not_found", "Command not found", false)
 	case errors.Is(err, store.ErrSessionNotFound):
 		api.WriteError(w, 404, "session_not_found", "Session not found", false)
+	case errors.Is(err, store.ErrJobNotFound):
+		api.WriteError(w, 404, "job_not_found", "Job not found", false)
 	default:
 		api.WriteError(w, 422, err.Error(), "Request failed", false)
 	}

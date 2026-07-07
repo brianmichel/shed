@@ -93,6 +93,49 @@ type Command struct {
 	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
+type JobState string
+
+const (
+	JobQueued            JobState = "queued"
+	JobAllocatingCompute JobState = "allocating_compute"
+	JobRunningAgent      JobState = "running_agent"
+	JobSucceeded         JobState = "succeeded"
+	JobFailed            JobState = "failed"
+	JobCancelled         JobState = "cancelled"
+)
+
+type JobTrigger struct {
+	Source      string `json:"source"`
+	Actor       string `json:"actor,omitempty"`
+	ExternalRef string `json:"external_ref,omitempty"`
+}
+
+type JobResult struct {
+	Branch   string `json:"branch,omitempty"`
+	PRURL    string `json:"pr_url,omitempty"`
+	PRNumber int    `json:"pr_number,omitempty"`
+}
+
+type Job struct {
+	ID             string            `json:"id"`
+	Repo           string            `json:"repo"`
+	BaseRef        string            `json:"base_ref"`
+	WorkBranch     string            `json:"work_branch"`
+	Prompt         string            `json:"prompt"`
+	ComputeClass   string            `json:"compute_class,omitempty"`
+	AgentDriver    string            `json:"agent_driver"`
+	ScmDriver      string            `json:"scm_driver"`
+	SandboxID      string            `json:"sandbox_id,omitempty"`
+	AgentCommandID string            `json:"agent_command_id,omitempty"`
+	State          JobState          `json:"state"`
+	FailureReason  string            `json:"failure_reason,omitempty"`
+	Trigger        JobTrigger        `json:"trigger"`
+	Result         JobResult         `json:"result"`
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	InsertedAt     time.Time         `json:"inserted_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
 type Event struct {
 	ID        string         `json:"id"`
 	SandboxID string         `json:"sandbox_id"`

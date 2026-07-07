@@ -27,6 +27,18 @@ type SandboxAllocationUpdate struct {
 	ComputeMetadata      map[string]string
 }
 
+type JobCreate struct {
+	Repo         string
+	BaseRef      string
+	WorkBranch   string
+	Prompt       string
+	ComputeClass string
+	AgentDriver  string
+	ScmDriver    string
+	Trigger      model.JobTrigger
+	Metadata     map[string]string
+}
+
 type CommandCreate struct {
 	Command   string
 	Cwd       string
@@ -57,6 +69,11 @@ type Store interface {
 	AppendEvent(ctx context.Context, sandboxID, commandID, source, eventType string, data map[string]any) (model.Event, error)
 	ListSandboxEvents(ctx context.Context, sandboxID string, after int64) ([]model.Event, int64, error)
 	ListCommandEvents(ctx context.Context, sandboxID, commandID string, after int64) ([]model.Event, int64, error)
+
+	CreateJob(ctx context.Context, in JobCreate) (model.Job, error)
+	ListJobs(ctx context.Context) ([]model.Job, error)
+	GetJob(ctx context.Context, jobID string) (model.Job, error)
+	UpdateJob(ctx context.Context, job model.Job) (model.Job, error)
 
 	RememberIdempotencyKey(ctx context.Context, key, value string) (string, bool, error)
 }

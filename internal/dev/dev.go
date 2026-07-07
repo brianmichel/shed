@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/brianmichel/shed/internal/compute"
+	"github.com/brianmichel/shed/internal/job"
 	"github.com/brianmichel/shed/internal/server"
 	"github.com/brianmichel/shed/internal/store"
 )
@@ -49,6 +50,8 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	srv := server.New(server.Config{Addr: cfg.Addr, UIEnabled: cfg.UIEnabled, ComputeManager: mgr, DefaultCompute: cfg.DefaultCompute}, st)
+	jobMgr := job.NewManager(job.Config{Store: st, Sandboxes: srv, Commands: srv})
+	srv.SetJobManager(jobMgr)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()
 	for i := 0; i < 100 && srv.Addr() == cfg.Addr; i++ {

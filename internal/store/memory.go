@@ -17,6 +17,7 @@ var (
 	ErrSessionNotFound = errors.New("session_not_found")
 	ErrInvalidSession  = errors.New("invalid_session")
 	ErrCommandNotFound = errors.New("command_not_found")
+	ErrJobNotFound     = errors.New("job_not_found")
 )
 
 type MemoryStore struct {
@@ -24,6 +25,7 @@ type MemoryStore struct {
 	sandboxes   map[string]model.Sandbox
 	sessions    map[string]model.ClientSession
 	commands    map[string]map[string]model.Command
+	jobs        map[string]model.Job
 	events      map[string][]model.Event
 	nextSeq     map[string]int64
 	idempotency map[string]string
@@ -34,6 +36,7 @@ func NewMemoryStore() *MemoryStore {
 		sandboxes:   map[string]model.Sandbox{},
 		sessions:    map[string]model.ClientSession{},
 		commands:    map[string]map[string]model.Command{},
+		jobs:        map[string]model.Job{},
 		events:      map[string][]model.Event{},
 		nextSeq:     map[string]int64{},
 		idempotency: map[string]string{},
@@ -267,6 +270,56 @@ func (s *MemoryStore) ListCommandEvents(_ context.Context, sandboxID, commandID 
 		return nil, after, ErrCommandNotFound
 	}
 	return filterEvents(s.events[sandboxID], commandID, after, true)
+}
+
+func (s *MemoryStore) CreateJob(_ context.Context, in JobCreate) (model.Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if in.AgentDriver == "" {
+		in.AgentDriver = "cli"
+	}
+	if in.ScmDriver == "" {
+		in.ScmDriver = "git"
+	}
+	if in.Trigger.Source == "" {
+		in.Trigger.Source = "manual"
+	}
+	job := model.Job{ID: newID("job"), Repo: in.Repo, BaseRef: in.BaseRef, WorkBranch: in.WorkBranch, Prompt: in.Prompt, ComputeClass: in.ComputeClass, AgentDriver: in.AgentDriver, ScmDriver: in.ScmDriver, State: model.JobQueued, Trigger: in.Trigger, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	s.jobs[job.ID] = job
+	return job, nil
+}
+
+func (s *MemoryStore) ListJobs(_ context.Context) ([]model.Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.Job, 0, len(s.jobs))
+	for _, job := range s.jobs {
+		out = append(out, job)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InsertedAt.After(out[j].InsertedAt) })
+	return out, nil
+}
+
+func (s *MemoryStore) GetJob(_ context.Context, jobID string) (model.Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[jobID]
+	if !ok {
+		return model.Job{}, ErrJobNotFound
+	}
+	return job, nil
+}
+
+func (s *MemoryStore) UpdateJob(_ context.Context, job model.Job) (model.Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.jobs[job.ID]; !ok {
+		return model.Job{}, ErrJobNotFound
+	}
+	job.UpdatedAt = time.Now().UTC()
+	s.jobs[job.ID] = job
+	return job, nil
 }
 
 func (s *MemoryStore) RememberIdempotencyKey(_ context.Context, key, value string) (string, bool, error) {

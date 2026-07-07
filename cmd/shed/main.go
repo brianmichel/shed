@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log"
 	"os"
@@ -11,122 +10,169 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brianmichel/shed/internal/cli"
 	"github.com/brianmichel/shed/internal/client"
 	"github.com/brianmichel/shed/internal/compute"
 	shedconfig "github.com/brianmichel/shed/internal/config"
 	"github.com/brianmichel/shed/internal/dev"
+	"github.com/brianmichel/shed/internal/job"
 	"github.com/brianmichel/shed/internal/server"
 	"github.com/brianmichel/shed/internal/store"
+	"github.com/spf13/cobra"
 )
 
 func main() {
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
-	if len(os.Args) < 2 {
-		usage()
-		os.Exit(2)
-	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	var err error
-	switch os.Args[1] {
-	case "server":
-		err = runServer(ctx, os.Args[2:])
-	case "client":
-		err = runClient(ctx, os.Args[2:])
-	case "dev":
-		err = runDev(ctx, os.Args[2:])
-	case "help", "-h", "--help":
-		usage()
-		return
-	default:
-		usage()
-		os.Exit(2)
+
+	// Cobra prints its own "Error: ..." plus contextual usage on failure, so
+	// there is nothing left for main to print here — just set the exit code.
+	if err := newRootCmd().ExecuteContext(ctx); err != nil {
+		os.Exit(1)
 	}
-	if err != nil && err != context.Canceled {
+}
+
+func newRootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "shed",
+		Short: "Shed is a single-binary control plane and execution runtime for sandboxes.",
+	}
+	root.AddCommand(newServerCmd(), newClientCmd(), newDevCmd(), cli.NewJobCommand())
+	return root
+}
+
+// runDaemon runs a long-lived server/client/dev process. Unlike `shed job`,
+// daemon failures are fatal crashes worth a timestamp, so they bypass
+// cobra's error return entirely and log.Fatal directly.
+func runDaemon(fn func() error) error {
+	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	if err := fn(); err != nil && err != context.Canceled {
 		log.Fatal(err)
 	}
+	return nil
 }
 
-func usage() { fmt.Fprintln(os.Stderr, "usage: shed <server|client|dev> [flags]") }
-
-func runServer(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("server", flag.ExitOnError)
-	addr := fs.String("addr", envOr("SHED_ADDR", "127.0.0.1:6464"), "HTTP listen address")
-	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
-	defaultCompute := fs.String("compute-driver", envOr("SHED_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
-	workspace := fs.String("compute-workspace-root", envOr("SHED_COMPUTE_WORKSPACE", ".shed-server/workspace"), "workspace root for the built-in local compute")
-	var plugins pluginConfigFlag
+func newServerCmd() *cobra.Command {
+	var (
+		addr           string
+		uiEnabled      bool
+		defaultCompute string
+		workspace      string
+		plugins        pluginConfigFlag
+		configPath     string
+	)
+	cmd := &cobra.Command{
+		Use:   "server",
+		Short: "Run the control-plane server",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			return runDaemon(func() error {
+				fileCfg, err := shedconfig.Load(configPath)
+				if err != nil {
+					return err
+				}
+				if defaultCompute == "local" && fileCfg.Compute.DefaultDriver != "" {
+					defaultCompute = fileCfg.Compute.DefaultDriver
+				}
+				externals, err := plugins.externalConfigs()
+				if err != nil {
+					return err
+				}
+				externals = append(externals, fileCfg.ExternalComputes()...)
+				mgr, err := buildComputeManagerFromConfigs(ctx, defaultCompute, workspace, externals, fileCfg.ComputeClasses)
+				if err != nil {
+					return err
+				}
+				st := store.NewMemoryStore()
+				srv := server.New(server.Config{Addr: addr, UIEnabled: uiEnabled, ComputeManager: mgr, DefaultCompute: defaultCompute}, st)
+				srv.SetJobManager(job.NewManager(job.Config{Store: st, Sandboxes: srv, Commands: srv}))
+				return srv.Start(ctx)
+			})
+		},
+	}
+	fs := cmd.Flags()
+	fs.StringVar(&addr, "addr", envOr("SHED_ADDR", "127.0.0.1:6464"), "HTTP listen address")
+	fs.BoolVar(&uiEnabled, "ui", true, "serve embedded operator UI")
+	fs.StringVar(&defaultCompute, "compute-driver", envOr("SHED_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
+	fs.StringVar(&workspace, "compute-workspace-root", envOr("SHED_COMPUTE_WORKSPACE", ".shed-server/workspace"), "workspace root for the built-in local compute")
 	plugins.setMany(envOr("SHED_COMPUTE_PLUGINS", ""))
 	fs.Var(&plugins, "compute-plugin", "external compute plugin as name=/path/to/plugin; repeatable")
-	configPath := fs.String("config", envOr("SHED_CONFIG", ""), "JSON config file path")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	fileCfg, err := shedconfig.Load(*configPath)
-	if err != nil {
-		return err
-	}
-	if *defaultCompute == "local" && fileCfg.Compute.DefaultDriver != "" {
-		*defaultCompute = fileCfg.Compute.DefaultDriver
-	}
-	externals, err := plugins.externalConfigs()
-	if err != nil {
-		return err
-	}
-	externals = append(externals, fileCfg.ExternalComputes()...)
-	mgr, err := buildComputeManagerFromConfigs(ctx, *defaultCompute, *workspace, externals, fileCfg.ComputeClasses)
-	if err != nil {
-		return err
-	}
-	return server.New(server.Config{Addr: *addr, UIEnabled: *uiEnabled, ComputeManager: mgr, DefaultCompute: *defaultCompute}, store.NewMemoryStore()).Start(ctx)
+	fs.StringVar(&configPath, "config", envOr("SHED_CONFIG", ""), "JSON config file path")
+	return cmd
 }
 
-func runClient(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("client", flag.ExitOnError)
-	serverURL := fs.String("server", envOr("SHED_SERVER_URL", "ws://127.0.0.1:6464/v1/client/connect"), "server websocket URL")
-	sessionKey := fs.String("session-key", envOr("SHED_SESSION_KEY", ""), "client session key")
-	sessionID := fs.String("session-id", envOr("SHED_SESSION_ID", ""), "client session id")
-	sandboxID := fs.String("sandbox-id", envOr("SHED_SANDBOX_ID", ""), "sandbox id")
-	workspace := fs.String("workspace-root", envOr("SHED_WORKSPACE_ROOT", "/tmp"), "workspace root")
-	_ = fs.String("config", "", "config file path (reserved)")
-	if err := fs.Parse(args); err != nil {
-		return err
+func newClientCmd() *cobra.Command {
+	var (
+		serverURL, sessionKey, sessionID, sandboxID, workspace string
+	)
+	cmd := &cobra.Command{
+		Use:   "client",
+		Short: "Run the in-compute client (executes inside a sandbox)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return runDaemon(func() error {
+				c, err := client.New(client.Config{ServerURL: serverURL, SessionKey: sessionKey, SessionID: sessionID, SandboxID: sandboxID, WorkspaceRoot: workspace, HeartbeatEvery: 10 * time.Second})
+				if err != nil {
+					return err
+				}
+				return c.Run(cmd.Context())
+			})
+		},
 	}
-	c, err := client.New(client.Config{ServerURL: *serverURL, SessionKey: *sessionKey, SessionID: *sessionID, SandboxID: *sandboxID, WorkspaceRoot: *workspace, HeartbeatEvery: 10 * time.Second})
-	if err != nil {
-		return err
-	}
-	return c.Run(ctx)
+	fs := cmd.Flags()
+	fs.StringVar(&serverURL, "server", envOr("SHED_SERVER_URL", "ws://127.0.0.1:6464/v1/client/connect"), "server websocket URL")
+	fs.StringVar(&sessionKey, "session-key", envOr("SHED_SESSION_KEY", ""), "client session key")
+	fs.StringVar(&sessionID, "session-id", envOr("SHED_SESSION_ID", ""), "client session id")
+	fs.StringVar(&sandboxID, "sandbox-id", envOr("SHED_SANDBOX_ID", ""), "sandbox id")
+	fs.StringVar(&workspace, "workspace-root", envOr("SHED_WORKSPACE_ROOT", "/tmp"), "workspace root")
+	fs.String("config", "", "config file path (reserved)")
+	return cmd
 }
 
-func runDev(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("dev", flag.ExitOnError)
-	addr := fs.String("addr", envOr("SHED_DEV_ADDR", "127.0.0.1:6464"), "HTTP listen address")
-	workspace := fs.String("workspace-root", envOr("SHED_DEV_WORKSPACE", ".shed-dev/workspace"), "workspace root")
-	uiEnabled := fs.Bool("ui", true, "serve embedded operator UI")
-	defaultCompute := fs.String("compute-driver", envOr("SHED_DEV_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
-	var plugins pluginConfigFlag
+func newDevCmd() *cobra.Command {
+	var (
+		addr           string
+		workspace      string
+		uiEnabled      bool
+		defaultCompute string
+		plugins        pluginConfigFlag
+		configPath     string
+	)
+	cmd := &cobra.Command{
+		Use:   "dev",
+		Short: "Run server and client together for local development",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			return runDaemon(func() error {
+				fileCfg, err := shedconfig.Load(configPath)
+				if err != nil {
+					return err
+				}
+				if defaultCompute == "local" && fileCfg.Compute.DefaultDriver != "" {
+					defaultCompute = fileCfg.Compute.DefaultDriver
+				}
+				externals, err := plugins.externalConfigs()
+				if err != nil {
+					return err
+				}
+				externals = append(externals, fileCfg.ExternalComputes()...)
+				return dev.Run(ctx, dev.Config{Addr: addr, WorkspaceRoot: workspace, UIEnabled: uiEnabled, DefaultCompute: defaultCompute, ExternalComputes: externals, ComputeClasses: fileCfg.ComputeClasses})
+			})
+		},
+	}
+	fs := cmd.Flags()
+	fs.StringVar(&addr, "addr", envOr("SHED_DEV_ADDR", "127.0.0.1:6464"), "HTTP listen address")
+	fs.StringVar(&workspace, "workspace-root", envOr("SHED_DEV_WORKSPACE", ".shed-dev/workspace"), "workspace root")
+	fs.BoolVar(&uiEnabled, "ui", true, "serve embedded operator UI")
+	fs.StringVar(&defaultCompute, "compute-driver", envOr("SHED_DEV_COMPUTE_DRIVER", "local"), "default sandbox compute driver")
 	plugins.setMany(envOr("SHED_DEV_COMPUTE_PLUGINS", ""))
 	fs.Var(&plugins, "compute-plugin", "external compute plugin as name=/path/to/plugin; repeatable")
-	configPath := fs.String("config", envOr("SHED_DEV_CONFIG", envOr("SHED_CONFIG", "")), "JSON config file path")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	fileCfg, err := shedconfig.Load(*configPath)
-	if err != nil {
-		return err
-	}
-	if *defaultCompute == "local" && fileCfg.Compute.DefaultDriver != "" {
-		*defaultCompute = fileCfg.Compute.DefaultDriver
-	}
-	externals, err := plugins.externalConfigs()
-	if err != nil {
-		return err
-	}
-	externals = append(externals, fileCfg.ExternalComputes()...)
-	return dev.Run(ctx, dev.Config{Addr: *addr, WorkspaceRoot: *workspace, UIEnabled: *uiEnabled, DefaultCompute: *defaultCompute, ExternalComputes: externals, ComputeClasses: fileCfg.ComputeClasses})
+	fs.StringVar(&configPath, "config", envOr("SHED_DEV_CONFIG", envOr("SHED_CONFIG", "")), "JSON config file path")
+	return cmd
 }
 
+// pluginConfigFlag is a repeatable name=/path/to/plugin flag, implementing
+// both stdlib flag.Value and pflag.Value (they share the same Set/String
+// shape; pflag additionally requires Type).
 type pluginConfigFlag []string
 
 func (f *pluginConfigFlag) String() string { return strings.Join(*f, ",") }
@@ -136,6 +182,7 @@ func (f *pluginConfigFlag) Set(v string) error {
 	}
 	return nil
 }
+func (f *pluginConfigFlag) Type() string { return "name=path" }
 func (f *pluginConfigFlag) setMany(v string) {
 	for _, part := range strings.Split(v, ",") {
 		_ = f.Set(part)
