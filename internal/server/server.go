@@ -209,6 +209,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/cancel", s.cancelAgentRun)
 	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}/events", s.agentRunEvents)
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/prepare-repository", s.prepareAgentRunRepository)
+	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/detect-dirty", s.detectAgentRunDirtyState)
 	s.mux.HandleFunc("GET /v1/repositories", s.listRepositories)
 	s.mux.HandleFunc("POST /v1/repositories", s.createRepository)
 	s.mux.HandleFunc("GET /v1/repositories/{repository_id}", s.getRepository)
@@ -410,6 +411,30 @@ func (s *Server) prepareAgentRunRepository(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	_, _ = s.store.AppendFactoryEvent(r.Context(), item.ID, run.ID, "server.repository", "repo.prepare.started", map[string]any{"repository_id": repo.ID, "command_id": cmd.ID, "ref": item.RepositoryRef, "base_branch": item.RepositoryBaseBranch, "work_branch": workBranch})
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
+}
+
+func (s *Server) detectAgentRunDirtyState(w http.ResponseWriter, r *http.Request) {
+	run, err := s.store.GetAgentRun(r.Context(), r.PathValue("agent_run_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	if run.SandboxID == "" {
+		api.WriteError(w, 409, "sandbox_not_assigned", "Agent run does not have an assigned sandbox", true)
+		return
+	}
+	item, err := s.store.GetWorkItem(r.Context(), run.WorkItemID)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	cmd, err := s.createAndDispatchCommand(r.Context(), run.SandboxID, store.CommandCreate{Command: "git -C '/workspace/repo' status --porcelain=v1", Cwd: "/workspace", TimeoutMS: 60 * 1000, Metadata: map[string]string{"agent_run_id": run.ID, "work_item_id": item.ID, "step": "dirty_state_detect"}})
+	if err != nil {
+		writeCommandDispatchErr(w, err)
+		return
+	}
+	_, _ = s.store.AppendFactoryEvent(r.Context(), item.ID, run.ID, "server.repository", "repo.dirty_check.started", map[string]any{"command_id": cmd.ID})
 	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": cmd})
 }
 

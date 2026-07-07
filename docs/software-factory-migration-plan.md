@@ -163,7 +163,7 @@ Acceptance criteria:
 | `SF-052` | `DONE` | `SF-050` | Add checkout configuration to WorkItem or AgentRun. |
 | `SF-053` | `DONE` | `SF-052` | Implement clone and checkout step inside sandbox. |
 | `SF-054` | `DONE` | `SF-053` | Add branch and worktree preparation. |
-| `SF-055` | `NOT_STARTED` | `SF-053` | Add dirty state detection. |
+| `SF-055` | `DONE` | `SF-053` | Add dirty state detection. |
 | `SF-056` | `NOT_STARTED` | `SF-055` | Add diff generation. |
 | `SF-057` | `NOT_STARTED` | `SF-056` | Add commit creation. |
 | `SF-058` | `NOT_STARTED` | `SF-057` | Add push branch support behind approval and policy. |
