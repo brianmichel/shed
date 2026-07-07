@@ -34,6 +34,8 @@ type JobCreate struct {
 	Prompt       string
 	ComputeClass string
 	AgentDriver  string
+	Provider     string
+	Model        string
 	ScmDriver    string
 	Trigger      model.JobTrigger
 	Metadata     map[string]string

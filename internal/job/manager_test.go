@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brianmichel/shed/internal/agent"
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/store"
 )
@@ -33,33 +34,37 @@ func (f *fakeSandboxManager) ReleaseSandbox(ctx context.Context, sandboxID, reas
 	return f.store.UpdateSandboxState(ctx, sandboxID, model.SandboxReleased)
 }
 
-type fakeCommandDispatcher struct {
-	store        store.Store
-	exitCode     int
-	delay        time.Duration
-	dispatchErr  error
-	dispatchedID string
+// fakeAgentRunner simulates agent.Manager.Run without spawning any real
+// process: it reports a fake command id, optionally waits (respecting
+// ctx cancellation, to simulate a long-running agent turn), then returns
+// a scripted result.
+type fakeAgentRunner struct {
+	succeeded     bool
+	failureReason string
+	err           error
+	delay         time.Duration
+	commandID     string
 }
 
-func (f *fakeCommandDispatcher) DispatchCommand(ctx context.Context, sandboxID string, in store.CommandCreate) (model.Command, error) {
-	if f.dispatchErr != nil {
-		return model.Command{}, f.dispatchErr
+func (f *fakeAgentRunner) Run(ctx context.Context, req agent.RunRequest, onCommandStarted func(commandID string)) (agent.RunResult, error) {
+	if f.err != nil {
+		return agent.RunResult{}, f.err
 	}
-	cmd, err := f.store.CreateCommand(ctx, sandboxID, in)
-	if err != nil {
-		return model.Command{}, err
+	id := f.commandID
+	if id == "" {
+		id = "cmd_fake"
 	}
-	f.dispatchedID = cmd.ID
-	go func() {
-		if f.delay > 0 {
-			time.Sleep(f.delay)
+	if onCommandStarted != nil {
+		onCommandStarted(id)
+	}
+	if f.delay > 0 {
+		select {
+		case <-time.After(f.delay):
+		case <-ctx.Done():
+			return agent.RunResult{}, ctx.Err()
 		}
-		code := f.exitCode
-		cmd.ExitCode = &code
-		cmd.State = model.CommandExited
-		_, _ = f.store.UpdateCommand(context.Background(), cmd)
-	}()
-	return cmd, nil
+	}
+	return agent.RunResult{Succeeded: f.succeeded, FailureReason: f.failureReason}, nil
 }
 
 func waitForTerminal(t *testing.T, st store.Store, jobID string) model.Job {
@@ -99,10 +104,10 @@ func waitForState(t *testing.T, st store.Store, jobID string, want model.JobStat
 func TestManagerHappyPath(t *testing.T) {
 	st := store.NewMemoryStore()
 	sbMgr := &fakeSandboxManager{store: st}
-	cmdMgr := &fakeCommandDispatcher{store: st, exitCode: 0}
-	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Commands: cmdMgr, PollInterval: 10 * time.Millisecond})
+	agentMgr := &fakeAgentRunner{succeeded: true}
+	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Agent: agentMgr, PollInterval: 10 * time.Millisecond})
 
-	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "https://example.com/repo.git", BaseRef: "main", Prompt: "do the thing"})
+	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "https://example.com/repo.git", BaseRef: "main", Prompt: "do the thing", Model: "test-model"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,10 +130,10 @@ func TestManagerHappyPath(t *testing.T) {
 func TestManagerCancelMidFlight(t *testing.T) {
 	st := store.NewMemoryStore()
 	sbMgr := &fakeSandboxManager{store: st}
-	cmdMgr := &fakeCommandDispatcher{store: st, exitCode: 0, delay: 2 * time.Second}
-	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Commands: cmdMgr, PollInterval: 10 * time.Millisecond})
+	agentMgr := &fakeAgentRunner{succeeded: true, delay: 2 * time.Second}
+	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Agent: agentMgr, PollInterval: 10 * time.Millisecond})
 
-	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt"})
+	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt", Model: "test-model"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,10 +155,10 @@ func TestManagerCancelMidFlight(t *testing.T) {
 func TestManagerCancelAlreadyTerminalFails(t *testing.T) {
 	st := store.NewMemoryStore()
 	sbMgr := &fakeSandboxManager{store: st}
-	cmdMgr := &fakeCommandDispatcher{store: st, exitCode: 0}
-	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Commands: cmdMgr, PollInterval: 10 * time.Millisecond})
+	agentMgr := &fakeAgentRunner{succeeded: true}
+	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Agent: agentMgr, PollInterval: 10 * time.Millisecond})
 
-	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt"})
+	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt", Model: "test-model"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,10 +172,10 @@ func TestManagerCancelAlreadyTerminalFails(t *testing.T) {
 func TestManagerAllocateFailureMarksJobFailed(t *testing.T) {
 	st := store.NewMemoryStore()
 	sbMgr := &fakeSandboxManager{store: st, createErr: errors.New("allocate boom")}
-	cmdMgr := &fakeCommandDispatcher{store: st}
-	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Commands: cmdMgr, PollInterval: 10 * time.Millisecond})
+	agentMgr := &fakeAgentRunner{succeeded: true}
+	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Agent: agentMgr, PollInterval: 10 * time.Millisecond})
 
-	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt"})
+	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt", Model: "test-model"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,13 +191,35 @@ func TestManagerAllocateFailureMarksJobFailed(t *testing.T) {
 	}
 }
 
-func TestManagerAgentCommandFailureMarksJobFailed(t *testing.T) {
+func TestManagerAgentRunFailureMarksJobFailed(t *testing.T) {
 	st := store.NewMemoryStore()
 	sbMgr := &fakeSandboxManager{store: st}
-	cmdMgr := &fakeCommandDispatcher{store: st, exitCode: 1}
-	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Commands: cmdMgr, PollInterval: 10 * time.Millisecond})
+	agentMgr := &fakeAgentRunner{succeeded: false, failureReason: "agent process crashed"}
+	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Agent: agentMgr, PollInterval: 10 * time.Millisecond})
 
-	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt"})
+	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt", Model: "test-model"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := waitForTerminal(t, st, j.ID)
+	if final.State != model.JobFailed {
+		t.Fatalf("state=%s want failed", final.State)
+	}
+	if final.FailureReason != "agent process crashed" {
+		t.Fatalf("failure_reason=%q", final.FailureReason)
+	}
+	if sbMgr.releaseCalls != 0 {
+		t.Fatalf("expected no release call on agent run failure, got %d", sbMgr.releaseCalls)
+	}
+}
+
+func TestManagerAgentRunErrorMarksJobFailed(t *testing.T) {
+	st := store.NewMemoryStore()
+	sbMgr := &fakeSandboxManager{store: st}
+	agentMgr := &fakeAgentRunner{err: errors.New("dispatch boom")}
+	mgr := NewManager(Config{Store: st, Sandboxes: sbMgr, Agent: agentMgr, PollInterval: 10 * time.Millisecond})
+
+	j, err := mgr.Start(context.Background(), CreateJobRequest{Repo: "repo", Prompt: "prompt", Model: "test-model"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +228,6 @@ func TestManagerAgentCommandFailureMarksJobFailed(t *testing.T) {
 		t.Fatalf("state=%s want failed", final.State)
 	}
 	if sbMgr.releaseCalls != 0 {
-		t.Fatalf("expected no release call on agent command failure, got %d", sbMgr.releaseCalls)
+		t.Fatalf("expected no release call on agent run error, got %d", sbMgr.releaseCalls)
 	}
 }

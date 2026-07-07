@@ -9,11 +9,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/brianmichel/shed/internal/agent"
 	"github.com/brianmichel/shed/internal/compute"
 	"github.com/brianmichel/shed/internal/job"
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/store"
 )
+
+// fakeAgentRunner stubs out the agent step so this test exercises the real
+// server/job/sandbox integration (compute allocation, sandbox readiness,
+// event plumbing) without depending on a real pi/LM Studio installation.
+type fakeAgentRunner struct{}
+
+func (fakeAgentRunner) Run(ctx context.Context, req agent.RunRequest, onCommandStarted func(commandID string)) (agent.RunResult, error) {
+	if onCommandStarted != nil {
+		onCommandStarted("cmd_fake_agent")
+	}
+	return agent.RunResult{Succeeded: true}, nil
+}
 
 func TestCreateJobWithoutManagerReturnsNotImplemented(t *testing.T) {
 	st := store.NewMemoryStore()
@@ -49,7 +62,7 @@ func TestJobEndToEndWithLocalCompute(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := New(Config{Addr: "127.0.0.1:0", ComputeManager: mgr, DefaultCompute: "local"}, st)
-	jobMgr := job.NewManager(job.Config{Store: st, Sandboxes: srv, Commands: srv, PollInterval: 20 * time.Millisecond})
+	jobMgr := job.NewManager(job.Config{Store: st, Sandboxes: srv, Agent: fakeAgentRunner{}, PollInterval: 20 * time.Millisecond})
 	srv.SetJobManager(jobMgr)
 
 	errCh := make(chan error, 1)
@@ -58,7 +71,7 @@ func TestJobEndToEndWithLocalCompute(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBufferString(`{"repo":"https://example.com/repo.git","base_ref":"main","prompt":"do the thing"}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewBufferString(`{"repo":"https://example.com/repo.git","base_ref":"main","prompt":"do the thing","model":"stub-model"}`))
 	w := httptest.NewRecorder()
 	srv.createJob(w, req)
 	if w.Code != http.StatusCreated {

@@ -277,7 +277,10 @@ func (s *MemoryStore) CreateJob(_ context.Context, in JobCreate) (model.Job, err
 	defer s.mu.Unlock()
 	now := time.Now().UTC()
 	if in.AgentDriver == "" {
-		in.AgentDriver = "cli"
+		in.AgentDriver = "pi-rpc"
+	}
+	if in.Provider == "" {
+		in.Provider = "lmstudio"
 	}
 	if in.ScmDriver == "" {
 		in.ScmDriver = "git"
@@ -285,7 +288,7 @@ func (s *MemoryStore) CreateJob(_ context.Context, in JobCreate) (model.Job, err
 	if in.Trigger.Source == "" {
 		in.Trigger.Source = "manual"
 	}
-	job := model.Job{ID: newID("job"), Repo: in.Repo, BaseRef: in.BaseRef, WorkBranch: in.WorkBranch, Prompt: in.Prompt, ComputeClass: in.ComputeClass, AgentDriver: in.AgentDriver, ScmDriver: in.ScmDriver, State: model.JobQueued, Trigger: in.Trigger, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	job := model.Job{ID: newID("job"), Repo: in.Repo, BaseRef: in.BaseRef, WorkBranch: in.WorkBranch, Prompt: in.Prompt, ComputeClass: in.ComputeClass, AgentDriver: in.AgentDriver, Provider: in.Provider, Model: in.Model, ScmDriver: in.ScmDriver, State: model.JobQueued, Trigger: in.Trigger, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
 	s.jobs[job.ID] = job
 	return job, nil
 }

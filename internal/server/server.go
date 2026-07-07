@@ -355,11 +355,17 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		Prompt       string            `json:"prompt"`
 		ComputeClass string            `json:"compute_class"`
 		AgentDriver  string            `json:"agent_driver"`
+		Provider     string            `json:"provider"`
+		Model        string            `json:"model"`
 		ScmDriver    string            `json:"scm_driver"`
 		Metadata     map[string]string `json:"metadata"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || in.Repo == "" || in.Prompt == "" {
 		api.WriteError(w, 422, "invalid_request", "repo and prompt are required", false)
+		return
+	}
+	if in.Model == "" {
+		api.WriteError(w, 422, "invalid_request", "model is required", false)
 		return
 	}
 	j, err := s.jobMgr.Start(r.Context(), job.CreateJobRequest{
@@ -369,6 +375,8 @@ func (s *Server) createJob(w http.ResponseWriter, r *http.Request) {
 		Prompt:       in.Prompt,
 		ComputeClass: in.ComputeClass,
 		AgentDriver:  in.AgentDriver,
+		Provider:     in.Provider,
+		Model:        in.Model,
 		ScmDriver:    in.ScmDriver,
 		Trigger:      model.JobTrigger{Source: "manual"},
 		Metadata:     in.Metadata,
@@ -684,44 +692,68 @@ func (s *Server) commandEvents(w http.ResponseWriter, r *http.Request) {
 	writeEvents(w, r, events, next)
 }
 
-func (s *Server) dispatchCommandControl(w http.ResponseWriter, r *http.Request, typ string, payload map[string]any) {
-	sandboxID := r.PathValue("sandbox_id")
-	commandID := r.PathValue("command_id")
-	sess, err := s.store.FindSessionBySandbox(r.Context(), sandboxID)
+// controlCommand sends a stdin/cancel/kill control message to a command,
+// either to a connected websocket client or via the compute driver's Exec
+// control path. It is the shared entry point used by the HTTP command
+// control API and by internal callers such as the agent runner.
+func (s *Server) controlCommand(ctx context.Context, sandboxID, commandID, typ string, payload map[string]any) (bool, error) {
+	sess, err := s.store.FindSessionBySandbox(ctx, sandboxID)
 	if err != nil {
-		writeStoreErr(w, err)
-		return
+		return false, err
 	}
 	cc := s.getClient(sess.SessionID)
 	if cc != nil {
 		if err := cc.send(typ, payload); err != nil {
-			api.WriteError(w, 502, "dispatch_failed", err.Error(), true)
-			return
+			return false, err
 		}
-		api.WriteJSON(w, 200, map[string]any{"data": map[string]bool{"accepted": true}})
-		return
+		return true, nil
 	}
-	sb, err := s.store.GetSandbox(r.Context(), sandboxID)
+	sb, err := s.store.GetSandbox(ctx, sandboxID)
 	if err != nil {
-		writeStoreErr(w, err)
-		return
+		return false, err
 	}
 	var resp compute.ExecControlResponse
 	switch typ {
 	case "command.stdin":
 		data, _ := payload["data"].(string)
-		resp, err = s.allocMgr.Stdin(r.Context(), sb.Compute, compute.ExecStdinRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, Data: data})
+		resp, err = s.allocMgr.Stdin(ctx, sb.Compute, compute.ExecStdinRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, Data: data})
 	case "command.cancel":
 		grace, _ := number(payload["grace_period_ms"])
-		resp, err = s.allocMgr.Cancel(r.Context(), sb.Compute, compute.ExecSignalRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, GracePeriodMS: int64(grace)})
+		resp, err = s.allocMgr.Cancel(ctx, sb.Compute, compute.ExecSignalRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, GracePeriodMS: int64(grace)})
 	case "command.kill":
-		resp, err = s.allocMgr.Kill(r.Context(), sb.Compute, compute.ExecSignalRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, Signal: "KILL"})
+		resp, err = s.allocMgr.Kill(ctx, sb.Compute, compute.ExecSignalRequest{APIVersion: sb.ComputeAPIVersion, SandboxID: sb.ID, ExternalID: sb.ExternalAllocationID, CommandID: commandID, Signal: "KILL"})
 	}
 	if err != nil {
+		return false, err
+	}
+	return resp.Accepted, nil
+}
+
+// SendCommandStdin writes data to a running command's stdin.
+func (s *Server) SendCommandStdin(ctx context.Context, sandboxID, commandID, data string) error {
+	_, err := s.controlCommand(ctx, sandboxID, commandID, "command.stdin", map[string]any{"command_id": commandID, "data": data, "encoding": "utf-8"})
+	return err
+}
+
+// KillCommand sends SIGKILL to a running command.
+func (s *Server) KillCommand(ctx context.Context, sandboxID, commandID string) error {
+	_, err := s.controlCommand(ctx, sandboxID, commandID, "command.kill", map[string]any{"command_id": commandID})
+	return err
+}
+
+func (s *Server) dispatchCommandControl(w http.ResponseWriter, r *http.Request, typ string, payload map[string]any) {
+	sandboxID := r.PathValue("sandbox_id")
+	commandID, _ := payload["command_id"].(string)
+	accepted, err := s.controlCommand(r.Context(), sandboxID, commandID, typ, payload)
+	if err != nil {
+		if errors.Is(err, store.ErrSandboxNotFound) || errors.Is(err, store.ErrSessionNotFound) {
+			writeStoreErr(w, err)
+			return
+		}
 		api.WriteError(w, 502, "dispatch_failed", err.Error(), true)
 		return
 	}
-	api.WriteJSON(w, 200, map[string]any{"data": map[string]bool{"accepted": resp.Accepted}})
+	api.WriteJSON(w, 200, map[string]any{"data": map[string]bool{"accepted": accepted}})
 }
 
 func (s *Server) clientConnect(w http.ResponseWriter, r *http.Request) {

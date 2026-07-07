@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/brianmichel/shed/internal/agent"
 	"github.com/brianmichel/shed/internal/cli"
 	"github.com/brianmichel/shed/internal/client"
 	"github.com/brianmichel/shed/internal/compute"
@@ -85,7 +86,8 @@ func newServerCmd() *cobra.Command {
 				}
 				st := store.NewMemoryStore()
 				srv := server.New(server.Config{Addr: addr, UIEnabled: uiEnabled, ComputeManager: mgr, DefaultCompute: defaultCompute}, st)
-				srv.SetJobManager(job.NewManager(job.Config{Store: st, Sandboxes: srv, Commands: srv}))
+				agentMgr := agent.NewManager(agent.Config{Store: st, Commands: srv})
+				srv.SetJobManager(job.NewManager(job.Config{Store: st, Sandboxes: srv, Agent: agentMgr}))
 				return srv.Start(ctx)
 			})
 		},

@@ -124,6 +124,8 @@ type Job struct {
 	Prompt         string            `json:"prompt"`
 	ComputeClass   string            `json:"compute_class,omitempty"`
 	AgentDriver    string            `json:"agent_driver"`
+	Provider       string            `json:"provider,omitempty"`
+	Model          string            `json:"model,omitempty"`
 	ScmDriver      string            `json:"scm_driver"`
 	SandboxID      string            `json:"sandbox_id,omitempty"`
 	AgentCommandID string            `json:"agent_command_id,omitempty"`

@@ -26,6 +26,8 @@ func printJobDetail(j model.Job) {
 		{"Base Ref", orNone(j.BaseRef)},
 		{"Work Branch", orNone(j.WorkBranch)},
 		{"Agent Driver", orNone(j.AgentDriver)},
+		{"Provider", orNone(j.Provider)},
+		{"Model", orNone(j.Model)},
 		{"Scm Driver", orNone(j.ScmDriver)},
 		{"Trigger", orNone(j.Trigger.Source)},
 		{"Submit Date", submitDate(j.InsertedAt)},

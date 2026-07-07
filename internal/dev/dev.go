@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/brianmichel/shed/internal/agent"
 	"github.com/brianmichel/shed/internal/compute"
 	"github.com/brianmichel/shed/internal/job"
 	"github.com/brianmichel/shed/internal/server"
@@ -50,7 +51,8 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 	srv := server.New(server.Config{Addr: cfg.Addr, UIEnabled: cfg.UIEnabled, ComputeManager: mgr, DefaultCompute: cfg.DefaultCompute}, st)
-	jobMgr := job.NewManager(job.Config{Store: st, Sandboxes: srv, Commands: srv})
+	agentMgr := agent.NewManager(agent.Config{Store: st, Commands: srv})
+	jobMgr := job.NewManager(job.Config{Store: st, Sandboxes: srv, Agent: agentMgr})
 	srv.SetJobManager(jobMgr)
 	errCh := make(chan error, 1)
 	go func() { errCh <- srv.Start(ctx) }()

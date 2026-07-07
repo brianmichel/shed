@@ -46,6 +46,8 @@ type CreateJobRequest struct {
 	Prompt       string            `json:"prompt"`
 	ComputeClass string            `json:"compute_class,omitempty"`
 	AgentDriver  string            `json:"agent_driver,omitempty"`
+	Provider     string            `json:"provider,omitempty"`
+	Model        string            `json:"model,omitempty"`
 	ScmDriver    string            `json:"scm_driver,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
 }

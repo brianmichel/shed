@@ -9,21 +9,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/brianmichel/shed/internal/agent"
 	"github.com/brianmichel/shed/internal/model"
 	"github.com/brianmichel/shed/internal/store"
 )
-
-// CommandDispatcher dispatches a command against a sandbox. *server.Server
-// satisfies this via Server.DispatchCommand.
-type CommandDispatcher interface {
-	DispatchCommand(ctx context.Context, sandboxID string, in store.CommandCreate) (model.Command, error)
-}
 
 // SandboxManager creates and releases the sandbox a job runs in.
 // *server.Server satisfies this via Server.CreateSandbox/Server.ReleaseSandbox.
 type SandboxManager interface {
 	CreateSandbox(ctx context.Context, in store.SandboxCreate) (model.Sandbox, model.ClientSession, error)
 	ReleaseSandbox(ctx context.Context, sandboxID, reason string) (model.Sandbox, error)
+}
+
+// AgentRunner drives the agent step of a job to completion. *agent.Manager
+// satisfies this.
+type AgentRunner interface {
+	Run(ctx context.Context, req agent.RunRequest, onCommandStarted func(commandID string)) (agent.RunResult, error)
 }
 
 // ErrJobNotCancellable is returned when Cancel is called on a job that has
@@ -33,7 +34,7 @@ var ErrJobNotCancellable = errors.New("job_not_cancellable")
 type Config struct {
 	Store        store.Store
 	Sandboxes    SandboxManager
-	Commands     CommandDispatcher
+	Agent        AgentRunner
 	PollInterval time.Duration
 }
 
@@ -57,6 +58,8 @@ type CreateJobRequest struct {
 	Prompt       string
 	ComputeClass string
 	AgentDriver  string
+	Provider     string
+	Model        string
 	ScmDriver    string
 	Trigger      model.JobTrigger
 	Metadata     map[string]string
@@ -72,6 +75,8 @@ func (m *Manager) Start(ctx context.Context, req CreateJobRequest) (model.Job, e
 		Prompt:       req.Prompt,
 		ComputeClass: req.ComputeClass,
 		AgentDriver:  req.AgentDriver,
+		Provider:     req.Provider,
+		Model:        req.Model,
 		ScmDriver:    req.ScmDriver,
 		Trigger:      req.Trigger,
 		Metadata:     req.Metadata,
@@ -164,32 +169,27 @@ func (m *Manager) run(ctx context.Context, j model.Job) {
 	}
 	_, _ = m.cfg.Store.AppendEvent(ctx, j.SandboxID, "", "server.job", "job.running_agent", map[string]any{"job_id": j.ID})
 
-	cmd, err := m.cfg.Commands.DispatchCommand(ctx, j.SandboxID, m.renderAgentCommand(j))
+	result, err := m.cfg.Agent.Run(ctx, agent.RunRequest{
+		SandboxID: j.SandboxID,
+		Prompt:    j.Prompt,
+		Provider:  j.Provider,
+		Model:     j.Model,
+	}, func(commandID string) {
+		j.AgentCommandID = commandID
+		if updated, uerr := m.cfg.Store.UpdateJob(ctx, j); uerr == nil {
+			j = updated
+		}
+	})
 	if err != nil {
 		if ctx.Err() != nil {
 			m.markCancelled(j)
 			return
 		}
-		fail("dispatch_agent: " + err.Error())
+		fail("agent_run: " + err.Error())
 		return
 	}
-	j.AgentCommandID = cmd.ID
-	if j, err = m.cfg.Store.UpdateJob(ctx, j); err != nil {
-		fail(err.Error())
-		return
-	}
-
-	final, err := m.waitCommandTerminal(ctx, j.SandboxID, cmd.ID)
-	if err != nil {
-		if ctx.Err() != nil {
-			m.markCancelled(j)
-			return
-		}
-		fail("agent_wait: " + err.Error())
-		return
-	}
-	if final.State != model.CommandExited || (final.ExitCode != nil && *final.ExitCode != 0) {
-		fail("agent command did not exit successfully")
+	if !result.Succeeded {
+		fail(result.FailureReason)
 		return
 	}
 
@@ -212,17 +212,6 @@ func (m *Manager) markCancelled(j model.Job) {
 	}
 }
 
-// renderAgentCommand is a stub for milestone 1; milestone 2 replaces this
-// with agent.Manager.Render output.
-func (m *Manager) renderAgentCommand(j model.Job) store.CommandCreate {
-	return store.CommandCreate{
-		Command:   "sleep 1 && echo done",
-		Cwd:       "/workspace",
-		TimeoutMS: 60000,
-		Metadata:  map[string]string{"job_id": j.ID, "kind": "agent"},
-	}
-}
-
 func (m *Manager) waitSandboxReady(ctx context.Context, sandboxID string) error {
 	ticker := time.NewTicker(m.cfg.PollInterval)
 	defer ticker.Stop()
@@ -241,31 +230,6 @@ func (m *Manager) waitSandboxReady(ctx context.Context, sandboxID string) error 
 			return ctx.Err()
 		case <-ticker.C:
 		}
-	}
-}
-
-func (m *Manager) waitCommandTerminal(ctx context.Context, sandboxID, commandID string) (model.Command, error) {
-	ticker := time.NewTicker(m.cfg.PollInterval)
-	defer ticker.Stop()
-	for {
-		cmd, err := m.cfg.Store.GetCommand(ctx, sandboxID, commandID)
-		if err == nil && isCommandTerminal(cmd.State) {
-			return cmd, nil
-		}
-		select {
-		case <-ctx.Done():
-			return model.Command{}, ctx.Err()
-		case <-ticker.C:
-		}
-	}
-}
-
-func isCommandTerminal(state model.CommandState) bool {
-	switch state {
-	case model.CommandExited, model.CommandKilled, model.CommandFailed:
-		return true
-	default:
-		return false
 	}
 }
 

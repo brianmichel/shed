@@ -12,15 +12,18 @@ func TestMemoryStoreJobCRUD(t *testing.T) {
 	ctx := context.Background()
 	st := NewMemoryStore()
 
-	created, err := st.CreateJob(ctx, JobCreate{Repo: "https://example.com/repo.git", BaseRef: "main", Prompt: "do the thing"})
+	created, err := st.CreateJob(ctx, JobCreate{Repo: "https://example.com/repo.git", BaseRef: "main", Prompt: "do the thing", Model: "lfm2.5-8b-a1b"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if created.State != model.JobQueued {
 		t.Fatalf("state=%s want queued", created.State)
 	}
-	if created.AgentDriver != "cli" || created.ScmDriver != "git" {
+	if created.AgentDriver != "pi-rpc" || created.Provider != "lmstudio" || created.ScmDriver != "git" {
 		t.Fatalf("unexpected defaults: %#v", created)
+	}
+	if created.Model != "lfm2.5-8b-a1b" {
+		t.Fatalf("model=%q", created.Model)
 	}
 	if created.Trigger.Source != "manual" {
 		t.Fatalf("trigger=%#v want manual default", created.Trigger)
