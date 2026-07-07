@@ -15,13 +15,14 @@ import (
 )
 
 var (
-	ErrSandboxNotFound  = errors.New("sandbox_not_found")
-	ErrSessionNotFound  = errors.New("session_not_found")
-	ErrInvalidSession   = errors.New("invalid_session")
-	ErrInvalidAPIToken  = errors.New("invalid_api_token")
-	ErrCommandNotFound  = errors.New("command_not_found")
-	ErrWorkItemNotFound = errors.New("work_item_not_found")
-	ErrAgentRunNotFound = errors.New("agent_run_not_found")
+	ErrSandboxNotFound    = errors.New("sandbox_not_found")
+	ErrSessionNotFound    = errors.New("session_not_found")
+	ErrInvalidSession     = errors.New("invalid_session")
+	ErrInvalidAPIToken    = errors.New("invalid_api_token")
+	ErrCommandNotFound    = errors.New("command_not_found")
+	ErrWorkItemNotFound   = errors.New("work_item_not_found")
+	ErrAgentRunNotFound   = errors.New("agent_run_not_found")
+	ErrRepositoryNotFound = errors.New("repository_not_found")
 )
 
 type MemoryStore struct {
@@ -32,6 +33,7 @@ type MemoryStore struct {
 	apiTokens      map[string]model.APIToken
 	workItems      map[string]model.WorkItem
 	agentRuns      map[string]model.AgentRun
+	repositories   map[string]model.Repository
 	events         map[string][]model.Event
 	nextSeq        map[string]int64
 	factoryEvents  map[string][]model.Event
@@ -47,6 +49,7 @@ func NewMemoryStore() *MemoryStore {
 		apiTokens:      map[string]model.APIToken{},
 		workItems:      map[string]model.WorkItem{},
 		agentRuns:      map[string]model.AgentRun{},
+		repositories:   map[string]model.Repository{},
 		events:         map[string][]model.Event{},
 		nextSeq:        map[string]int64{},
 		factoryEvents:  map[string][]model.Event{},
@@ -412,6 +415,45 @@ func (s *MemoryStore) UpdateAgentRunState(_ context.Context, agentRunID string, 
 	s.agentRuns[agentRunID] = run
 	s.appendFactoryEventLocked(run.WorkItemID, run.ID, "server.store", "agent_run."+string(state), map[string]any{"state": string(state)})
 	return run, nil
+}
+
+func (s *MemoryStore) CreateRepository(_ context.Context, in RepositoryCreate) (model.Repository, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := time.Now().UTC()
+	if in.Provider == "" {
+		in.Provider = "git"
+	}
+	if in.DefaultBranch == "" {
+		in.DefaultBranch = "main"
+	}
+	repo := model.Repository{ID: newID("repo"), Name: in.Name, Provider: in.Provider, CloneURL: in.CloneURL, DefaultBranch: in.DefaultBranch, CredentialRef: in.CredentialRef, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	s.repositories[repo.ID] = repo
+	return repo, nil
+}
+
+func (s *MemoryStore) ListRepositories(_ context.Context, opts RepositoryListOptions) ([]model.Repository, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]model.Repository, 0, len(s.repositories))
+	for _, repo := range s.repositories {
+		if opts.Provider != "" && repo.Provider != opts.Provider {
+			continue
+		}
+		out = append(out, repo)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].InsertedAt.After(out[j].InsertedAt) })
+	return pageSlice(out, opts.Page), nil
+}
+
+func (s *MemoryStore) GetRepository(_ context.Context, repositoryID string) (model.Repository, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	repo, ok := s.repositories[repositoryID]
+	if !ok {
+		return model.Repository{}, ErrRepositoryNotFound
+	}
+	return repo, nil
 }
 
 func (s *MemoryStore) CreateCommand(_ context.Context, sandboxID string, in CommandCreate) (model.Command, error) {

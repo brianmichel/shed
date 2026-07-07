@@ -199,6 +199,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}", s.getAgentRun)
 	s.mux.HandleFunc("POST /v1/agent-runs/{agent_run_id}/cancel", s.cancelAgentRun)
 	s.mux.HandleFunc("GET /v1/agent-runs/{agent_run_id}/events", s.agentRunEvents)
+	s.mux.HandleFunc("GET /v1/repositories", s.listRepositories)
+	s.mux.HandleFunc("POST /v1/repositories", s.createRepository)
+	s.mux.HandleFunc("GET /v1/repositories/{repository_id}", s.getRepository)
 	s.mux.HandleFunc("GET /v1/sandboxes", s.listSandboxes)
 	s.mux.HandleFunc("POST /v1/sandboxes", s.createSandbox)
 	s.mux.HandleFunc("GET /v1/sandboxes/{sandbox_id}", s.getSandbox)
@@ -364,6 +367,38 @@ func (s *Server) agentRunEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeEvents(w, r, events, next)
+}
+
+func (s *Server) createRepository(w http.ResponseWriter, r *http.Request) {
+	var in store.RepositoryCreate
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil || strings.TrimSpace(in.Name) == "" || strings.TrimSpace(in.CloneURL) == "" {
+		api.WriteError(w, 422, "invalid_request", "name and clone_url are required", false)
+		return
+	}
+	repo, err := s.store.CreateRepository(r.Context(), in)
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, http.StatusCreated, map[string]any{"data": repo})
+}
+
+func (s *Server) listRepositories(w http.ResponseWriter, r *http.Request) {
+	repos, err := s.store.ListRepositories(r.Context(), store.RepositoryListOptions{Page: parsePage(r), Provider: r.URL.Query().Get("provider")})
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": repos})
+}
+
+func (s *Server) getRepository(w http.ResponseWriter, r *http.Request) {
+	repo, err := s.store.GetRepository(r.Context(), r.PathValue("repository_id"))
+	if err != nil {
+		writeStoreErr(w, err)
+		return
+	}
+	api.WriteJSON(w, 200, map[string]any{"data": repo})
 }
 
 func (s *Server) createSandbox(w http.ResponseWriter, r *http.Request) {
@@ -927,6 +962,8 @@ func writeStoreErr(w http.ResponseWriter, err error) {
 		api.WriteError(w, 404, "work_item_not_found", "Work item not found", false)
 	case errors.Is(err, store.ErrAgentRunNotFound):
 		api.WriteError(w, 404, "agent_run_not_found", "Agent run not found", false)
+	case errors.Is(err, store.ErrRepositoryNotFound):
+		api.WriteError(w, 404, "repository_not_found", "Repository not found", false)
 	default:
 		api.WriteError(w, 422, err.Error(), "Request failed", false)
 	}

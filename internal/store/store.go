@@ -35,13 +35,13 @@ type CommandCreate struct {
 }
 
 type WorkItemCreate struct {
-	Title       string
-	Description string
-	SourceType  string
-	SourceID    string
-	Actor       string
-	Priority    int
-	Metadata    map[string]string
+	Title       string            `json:"title"`
+	Description string            `json:"description"`
+	SourceType  string            `json:"source_type"`
+	SourceID    string            `json:"source_id"`
+	Actor       string            `json:"actor"`
+	Priority    int               `json:"priority"`
+	Metadata    map[string]string `json:"metadata"`
 }
 
 type WorkItemListOptions struct {
@@ -50,18 +50,32 @@ type WorkItemListOptions struct {
 }
 
 type AgentRunCreate struct {
-	SandboxID string
-	Harness   string
-	Model     string
-	Prompt    string
-	Actor     string
-	Metadata  map[string]string
+	SandboxID string            `json:"sandbox_id"`
+	Harness   string            `json:"harness"`
+	Model     string            `json:"model"`
+	Prompt    string            `json:"prompt"`
+	Actor     string            `json:"actor"`
+	Metadata  map[string]string `json:"metadata"`
 }
 
 type AgentRunListOptions struct {
 	Page       Page
 	State      model.AgentRunState
 	WorkItemID string
+}
+
+type RepositoryCreate struct {
+	Name          string            `json:"name"`
+	Provider      string            `json:"provider"`
+	CloneURL      string            `json:"clone_url"`
+	DefaultBranch string            `json:"default_branch"`
+	CredentialRef string            `json:"credential_ref"`
+	Metadata      map[string]string `json:"metadata"`
+}
+
+type RepositoryListOptions struct {
+	Page     Page
+	Provider string
 }
 
 type APITokenCreate struct {
@@ -122,6 +136,10 @@ type Store interface {
 	ListAgentRuns(ctx context.Context, opts AgentRunListOptions) ([]model.AgentRun, error)
 	GetAgentRun(ctx context.Context, agentRunID string) (model.AgentRun, error)
 	UpdateAgentRunState(ctx context.Context, agentRunID string, state model.AgentRunState) (model.AgentRun, error)
+
+	CreateRepository(ctx context.Context, in RepositoryCreate) (model.Repository, error)
+	ListRepositories(ctx context.Context, opts RepositoryListOptions) ([]model.Repository, error)
+	GetRepository(ctx context.Context, repositoryID string) (model.Repository, error)
 
 	CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error)
 	ListCommands(ctx context.Context, sandboxID string, opts CommandListOptions) ([]model.Command, error)

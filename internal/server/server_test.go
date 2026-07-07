@@ -224,6 +224,61 @@ func TestAgentRunAPI(t *testing.T) {
 	}
 }
 
+func TestRepositoryAPI(t *testing.T) {
+	srv := New(Config{APIToken: "api-secret"}, store.NewMemoryStore())
+
+	invalidReq := httptest.NewRequest(http.MethodPost, "/v1/repositories", strings.NewReader(`{"name":"shed"}`))
+	invalidReq.Header.Set("Authorization", "Bearer api-secret")
+	invalid := httptest.NewRecorder()
+	srv.ServeHTTP(invalid, invalidReq)
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/repositories", strings.NewReader(`{"name":"shed","provider":"github","clone_url":"https://github.com/brianmichel/shed.git","default_branch":"main","credential_ref":"secret/github","metadata":{"owner":"brianmichel"}}`))
+	createReq.Header.Set("Authorization", "Bearer api-secret")
+	create := httptest.NewRecorder()
+	srv.ServeHTTP(create, createReq)
+	if create.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", create.Code, create.Body.String())
+	}
+	var created struct {
+		Data model.Repository `json:"data"`
+	}
+	if err := json.NewDecoder(create.Body).Decode(&created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Data.ID == "" || created.Data.Provider != "github" || created.Data.CloneURL == "" {
+		t.Fatalf("created repository=%#v", created.Data)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/v1/repositories/"+created.Data.ID, nil)
+	getReq.Header.Set("Authorization", "Bearer api-secret")
+	getReq.SetPathValue("repository_id", created.Data.ID)
+	get := httptest.NewRecorder()
+	srv.ServeHTTP(get, getReq)
+	if get.Code != http.StatusOK {
+		t.Fatalf("get status=%d body=%s", get.Code, get.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/v1/repositories?provider=github&limit=1", nil)
+	listReq.Header.Set("Authorization", "Bearer api-secret")
+	list := httptest.NewRecorder()
+	srv.ServeHTTP(list, listReq)
+	if list.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", list.Code, list.Body.String())
+	}
+	var listed struct {
+		Data []model.Repository `json:"data"`
+	}
+	if err := json.NewDecoder(list.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Data) != 1 || listed.Data[0].ID != created.Data.ID {
+		t.Fatalf("listed repositories=%#v", listed.Data)
+	}
+}
+
 func TestCreateSandboxReturnsOneTimeAgentTokenAndRedactsSecrets(t *testing.T) {
 	ctx := context.Background()
 	st := store.NewMemoryStore()

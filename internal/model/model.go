@@ -124,6 +124,18 @@ type WorkItem struct {
 	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
+type Repository struct {
+	ID            string            `json:"id"`
+	Name          string            `json:"name"`
+	Provider      string            `json:"provider,omitempty"`
+	CloneURL      string            `json:"clone_url"`
+	DefaultBranch string            `json:"default_branch,omitempty"`
+	CredentialRef string            `json:"credential_ref,omitempty"`
+	Metadata      map[string]string `json:"metadata,omitempty"`
+	InsertedAt    time.Time         `json:"inserted_at"`
+	UpdatedAt     time.Time         `json:"updated_at"`
+}
+
 type AgentRun struct {
 	ID          string            `json:"id"`
 	WorkItemID  string            `json:"work_item_id"`

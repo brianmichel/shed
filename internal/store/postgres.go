@@ -497,6 +497,52 @@ func (s *PostgresStore) UpdateAgentRunState(ctx context.Context, agentRunID stri
 	return run, err
 }
 
+func (s *PostgresStore) CreateRepository(ctx context.Context, in RepositoryCreate) (model.Repository, error) {
+	now := time.Now().UTC()
+	if in.Provider == "" {
+		in.Provider = "git"
+	}
+	if in.DefaultBranch == "" {
+		in.DefaultBranch = "main"
+	}
+	repo := model.Repository{ID: newID("repo"), Name: in.Name, Provider: in.Provider, CloneURL: in.CloneURL, DefaultBranch: in.DefaultBranch, CredentialRef: in.CredentialRef, Metadata: cloneStringMap(in.Metadata), InsertedAt: now, UpdatedAt: now}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO repositories (id, name, provider, clone_url, default_branch, credential_ref, metadata, inserted_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`, repo.ID, repo.Name, repo.Provider, repo.CloneURL, repo.DefaultBranch, repo.CredentialRef, jsonParam(repo.Metadata), repo.InsertedAt, repo.UpdatedAt)
+	return repo, err
+}
+
+func (s *PostgresStore) ListRepositories(ctx context.Context, opts RepositoryListOptions) ([]model.Repository, error) {
+	query := `SELECT id, name, provider, clone_url, default_branch, credential_ref, metadata, inserted_at, updated_at FROM repositories`
+	args := []any{}
+	if opts.Provider != "" {
+		args = append(args, opts.Provider)
+		query += fmt.Sprintf(" WHERE provider = $%d", len(args))
+	}
+	query += " ORDER BY inserted_at DESC"
+	query, args = appendPage(query, args, opts.Page)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []model.Repository{}
+	for rows.Next() {
+		repo, err := scanRepository(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, repo)
+	}
+	return out, rows.Err()
+}
+
+func (s *PostgresStore) GetRepository(ctx context.Context, repositoryID string) (model.Repository, error) {
+	repo, err := scanRepository(s.db.QueryRowContext(ctx, `SELECT id, name, provider, clone_url, default_branch, credential_ref, metadata, inserted_at, updated_at FROM repositories WHERE id = $1`, repositoryID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return model.Repository{}, ErrRepositoryNotFound
+	}
+	return repo, err
+}
+
 func (s *PostgresStore) CreateCommand(ctx context.Context, sandboxID string, in CommandCreate) (model.Command, error) {
 	now := time.Now().UTC()
 	if in.Cwd == "" {
@@ -916,6 +962,19 @@ func scanAgentRun(row rowScanner) (model.AgentRun, error) {
 		return model.AgentRun{}, err
 	}
 	return run, nil
+}
+
+func scanRepository(row rowScanner) (model.Repository, error) {
+	var repo model.Repository
+	var metadata []byte
+	err := row.Scan(&repo.ID, &repo.Name, &repo.Provider, &repo.CloneURL, &repo.DefaultBranch, &repo.CredentialRef, &metadata, &repo.InsertedAt, &repo.UpdatedAt)
+	if err != nil {
+		return model.Repository{}, err
+	}
+	if err := scanJSON(metadata, &repo.Metadata); err != nil {
+		return model.Repository{}, err
+	}
+	return repo, nil
 }
 
 func scanEvent(row rowScanner) (model.Event, error) {

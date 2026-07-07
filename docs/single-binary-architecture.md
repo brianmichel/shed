@@ -92,6 +92,9 @@ Core endpoints:
 - `GET /v1/agent-runs/{agent_run_id}`
 - `POST /v1/agent-runs/{agent_run_id}/cancel`
 - `GET /v1/agent-runs/{agent_run_id}/events?after=N`
+- `POST /v1/repositories` — register a repository target for factory work.
+- `GET /v1/repositories`
+- `GET /v1/repositories/{repository_id}`
 - `POST /v1/sandboxes` — create a logical sandbox/allocation, issue client credentials, and call the selected compute driver.
 - `GET /v1/sandboxes`
 - `GET /v1/sandboxes/{sandbox_id}`

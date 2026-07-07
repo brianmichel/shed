@@ -158,8 +158,8 @@ Acceptance criteria:
 
 | ID | State | Depends On | Task |
 |---|---|---|---|
-| `SF-050` | `NOT_STARTED` | `SF-030` | Add `Repository` model. |
-| `SF-051` | `NOT_STARTED` | `SF-050` | Add repository API for registering repositories. |
+| `SF-050` | `DONE` | `SF-030` | Add `Repository` model. |
+| `SF-051` | `DONE` | `SF-050` | Add repository API for registering repositories. |
 | `SF-052` | `NOT_STARTED` | `SF-050` | Add checkout configuration to WorkItem or AgentRun. |
 | `SF-053` | `NOT_STARTED` | `SF-052` | Implement clone and checkout step inside sandbox. |
 | `SF-054` | `NOT_STARTED` | `SF-053` | Add branch and worktree preparation. |
