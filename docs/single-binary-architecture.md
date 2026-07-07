@@ -96,6 +96,7 @@ Core endpoints:
 - `POST /v1/agent-runs/{agent_run_id}/detect-dirty` — run a sandbox dirty-state check for the prepared repository.
 - `POST /v1/agent-runs/{agent_run_id}/generate-diff` — generate a sandbox diff for the prepared repository.
 - `POST /v1/agent-runs/{agent_run_id}/create-commit` — create a Git commit in the prepared repository.
+- `POST /v1/agent-runs/{agent_run_id}/push-branch` — push the per-run branch after explicit approval.
 - `POST /v1/repositories` — register a repository target for factory work.
 - `GET /v1/repositories`
 - `GET /v1/repositories/{repository_id}`
